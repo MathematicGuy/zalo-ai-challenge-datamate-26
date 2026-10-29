@@ -57,7 +57,7 @@ tells you how to read:
   ("kó nhìu", "cko a xin", "o đờ", "🤔").
 - 15 question strings appear in both train and public (template overlap only; different businesses).
 
-## EDA findings (notebooks/01_eda.ipynb, 2026-10-28)
+## EDA findings (notebooks/01_data.ipynb Part B, 2026-10-28; data cards added 2026-10-30)
 
 **Train does not cover the public test's industries.** Train has no phone, motorbike-repair or
 mother-&-baby shop; its rulebook has only the Cà phê, Nhà thuốc, VLXD sections. Four public shops
@@ -104,3 +104,17 @@ All three are checkable before answering: data date range, field availability, s
   "khong giao duoc", "hang tra ve", "shipping"...) mapping to 4 states. Walk-in customer:
   "khách lẻ", "kl", "lẻ".
 - Trap: ISO datetimes ('2025-02-01 06:03:42') parsed with `dayfirst=True` swap day and month.
+
+**Data cards (01_data §B10, normalized data)**
+- README quality: train 26 full / 4 none; public 8 full / 3 partial / 3 none.
+- Sale dates from parsed columns: every shop's last sale date equals the README's "đến hết" date;
+  first sale dates range 2025-01-01 to 2025-07-01 (repair shop dev_012 starts in July 2025).
+- Share of shops recording each entity (column names + README meanings), public vs train: staff /
+  technicians 21% vs 3%, sales channel 36% vs 20%, price history 43% vs 27%, purchases 43% vs 30%,
+  returns 50% vs 37%, warranty 7% vs 0%; fewer product catalogs (64% vs 93%), inventory (43% vs 63%),
+  unit conversions (57% vs 70%), batches / expiry (7% vs 17%). Questions about staff, channels and
+  price changes have little train coverage.
+- Fill-down needs tolerance: in dev_004, 8,914 orders had a few stray names on follow-up lines,
+  which blocked a "blank on every follow-up line" rule. The fill now applies to columns blank on
+  ≥ 90% of follow-up lines.
+

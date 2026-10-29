@@ -32,24 +32,36 @@ No rule is restated in code, so a new rulebook needs no change.
   reasoning. [TableMaster](https://arxiv.org/abs/2501.19378)
 - ReFoRCE: iterative column exploration and format restriction. [ReFoRCE](https://arxiv.org/abs/2502.00675)
 
-**Decision (context.py):** per column show the README meaning, cell kinds, blank share, which helper
-reads it and the date range over the whole column (a head sample hid 14 of 15 months in biz_101),
+**Decision (01_data §A5):** per column show the README meaning, cell kinds, blank share, the parsed
+column to use and the date range over the whole column (a head sample hid 14 of 15 months in biz_101),
 and ALL values of low-cardinality columns. Same-column monthly sheets are described once with the
 union date range. Column exploration is done once, deterministically, instead of by the model.
 
 ## 3. Rule-agnostic helpers (normalization layer)
 
 v0 logs: the model failed on `'1 thg 6 2025'` twice and repaired by rewriting the same broken code.
-**Decision (helpers.py):** tested parsers for money, quantity and date spellings (Excel serials,
+**Decision (src/datamate/helpers.py):** tested parsers for money, quantity and date spellings (Excel serials,
 ISO without day-first, `1/4` with the sheet's year), text folding, fill-down-then-dedupe of order
 lines, lunar→solar lookup. Mechanics only; which rows count as revenue stays with the rulebook.
+
+## 3b. Normalize at load time instead of asking the model to parse
+
+v2's logs (30 validation questions) showed the model calling `pd.to_datetime` on `'1 thg 6 2025'`
+instead of the helpers: every date became NaT, the filter kept nothing and it answered 0 ("doanh thu
+hôm qua" → 0 for a reference of 6,873,700). A 9B model does not reliably use helpers it is told about.
+TableMaster's table normalization points the same way. [TableMaster](https://arxiv.org/abs/2501.19378)
+
+**Decision (01_data §A3, used by prompt v3):** parse once, deterministically: `<col>__date`,
+`<col>__dt`, `<col>__num` next to the raw columns; fill order-level cells down; stack same-column
+tables into `ALL …*` views. Verified without a GPU: fixed-code monthly revenue over the normalized
+tables equals all 71 total-revenue train answers it applies to (`03_evaluate` §4).
 
 ## 4. Value linking
 
 - CHESS: retrieving database values that match the question adds ~5 points; schema pruning ~2.
   [CHESS](https://arxiv.org/html/2405.16755v1)
 
-**Decision (retrieval/values.py):** names in the data whose words all occur in the question (or
+**Decision (02_agent §2, ValueIndex):** names in the data whose words all occur in the question (or
 ≥ 3 content words) are listed next to the question with their table and column, so the model
 filters on a real spelling ('Trà vải (M)', 'Natri clorid', 'Size XL').
 
@@ -60,8 +72,8 @@ filters on a real spelling ('Trà vải (M)', 'Natri clorid', 'Size XL').
 - Irrelevant context sharply lowers accuracy (GSM-IC). [Shi et al. 2023](https://arxiv.org/pdf/2302.00093)
 
 **Decision:** the question and its matched values sit last. Retrieving rulebook rows to repeat next to
-the question is **off by default** (`--rules-k 0`). Measured on 48 hand-labelled train questions
-(`notebooks/03_retrieval.py`, labels in `splits/rule_labels_train.json`):
+the question is **off by default** (`RULES_K = 0`). Measured on 48 hand-labelled train questions
+(`03_evaluate` §3, labels in `splits/rule_labels_train.json`):
 
 | retriever | R@3 | P@3 | R@5 | P@5 |
 |---|---|---|---|---|
@@ -109,9 +121,9 @@ answer type. The code must print intermediate counts and reconsider when a filte
 - TrustSQL: under penalties, no method consistently beats "abstain on everything".
   [TrustSQL](https://arxiv.org/html/2403.15879v4)
 
-**Decision (select.py):** k samples (default 5, T=0.7, fixed seed), clustered by the value the scorer
+**Decision (02_agent §5):** k samples (default 5, T=0.7, fixed seed), clustered by the value the scorer
 compares; support = largest cluster / k; answer only if support ≥ τ. τ is tuned on validation by PA
-(`evaluate.sweep_tau`), never on the public test. Because consistent errors survive voting, rule-
+(`03_evaluate` §2), never on the public test. Because consistent errors survive voting, rule-
 based checks (date coverage, field availability) stay in the prompt.
 
 ## 9. Repair turns

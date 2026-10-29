@@ -1,6 +1,5 @@
 import pytest
 
-from datamate.io import load_answers
 from datamate.scoring import penalized_accuracy, score_one
 
 STR = {"type": "string", "answer": "Sting dâu 330ml", "alias": ["SP0042"]}
@@ -45,8 +44,8 @@ def test_score_one(pred, ref, want):
     assert score_one(pred, ref) == want
 
 
-def test_gold_scores_perfect_on_train():
-    gold = {r["id"]: r for r in load_answers("train").to_dict("records")}
+def test_gold_scores_perfect_on_train(train_answers):
+    gold = {r["id"]: r for r in train_answers}
     res = penalized_accuracy(gold, gold)
     assert res["PA"] == 1.0 and res["n"] == 3000
 

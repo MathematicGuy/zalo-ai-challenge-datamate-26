@@ -6,9 +6,15 @@ the reference type and its value matches under that type's rule.
 from __future__ import annotations
 
 import math
+import unicodedata
 from collections import Counter
 
-from .text import norm_answer
+def norm_answer(s) -> str:
+    """The organizers' string normalization: NFC, lowercase, non letter/digit/space -> space, collapse."""
+    s = unicodedata.normalize("NFC", str(s)).lower()
+    s = "".join(c if c.isalnum() or c.isspace() else " " for c in s)
+    return " ".join(s.split())
+
 
 VALUE_TYPES = {"number", "percent", "string", "date", "boolean", "list", "table"}
 ALL_TYPES = VALUE_TYPES | {"unanswerable", "abstain"}

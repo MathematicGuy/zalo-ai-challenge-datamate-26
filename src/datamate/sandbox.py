@@ -2,6 +2,11 @@
 
 A spawned worker (no CUDA, no vLLM threads) loads the tables once; each job runs in a child forked
 from that worker, so a crash, hang or mutation of `tables` cannot leak into the next job.
+
+This module and helpers.py must stay importable files: `spawn` re-imports the worker function, and
+the generated code's namespace is built from helpers.EXPORTS. The tables reach the worker as a plain
+pickle {"frames": {key: DataFrame}, "readme": str} written by save_tables, so the notebooks are free
+to define their own classes.
 """
 from __future__ import annotations
 
@@ -19,6 +24,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PRELUDE = "import pandas as pd\nimport numpy as np\nimport re, math, datetime, unicodedata\n"
+
+
+def save_tables(path: Path, frames: dict, readme: str = "") -> Path:
+    """Write the worker's input: plain pandas objects only."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pickle.dumps({"frames": frames, "readme": readme}))
+    return path
 
 
 @dataclass
@@ -74,14 +87,14 @@ def _worker(conn, biz_pickle: str, calendar_csv: str, timeout: float, max_stdout
     import pandas as pd
 
     from . import helpers
-    biz = pickle.loads(Path(biz_pickle).read_bytes())
+    payload = pickle.loads(Path(biz_pickle).read_bytes())
     calendar = pd.read_csv(calendar_csv)
     ctx = mp.get_context("fork")
     parallel = int(os.environ.get("DATAMATE_EXEC_PARALLEL", 4))
 
     def start(code, as_of):
-        env = {**helpers.EXPORTS, "tables": biz.frames, "calendar": calendar, "AS_OF": pd.Timestamp(as_of),
-               "README": biz.readme.text}
+        env = {**helpers.EXPORTS, "tables": payload["frames"], "calendar": calendar, "AS_OF": pd.Timestamp(as_of),
+               "README": payload.get("readme", "")}
         r_conn, w_conn = ctx.Pipe(duplex=False)
         p = ctx.Process(target=_child, args=(w_conn, code, env, max_stdout))
         p.start()

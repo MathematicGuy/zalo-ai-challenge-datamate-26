@@ -6,12 +6,15 @@ requires-python = ">=3.12"
 dependencies = [
     "pandas>=2.2",
     "openpyxl>=3.1",
+    "nbformat",
+    "papermill",
+    "ipykernel",
 ]
 
 [project.optional-dependencies]
 llm = ["vllm==0.32.0", "ninja"]
-retrieval = ["sentence-transformers"]   # only for --rule-retriever dense / hybrid
-dev = ["pytest", "ruff", "jupytext", "nbconvert", "nbclient", "ipykernel", "matplotlib"]
+retrieval = ["sentence-transformers"]   # only for RULE_RETRIEVER dense / hybrid (02_agent)
+dev = ["pytest", "ruff", "matplotlib", "nbconvert"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -19,9 +22,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.jupytext]
-formats = "ipynb,py:percent"
 
 [tool.ruff]
 line-length = 120
@@ -32,6 +32,6 @@ ignore = ["E731", "E741"]
 
 [tool.ruff.lint.per-file-ignores]
 # Prompt and helper-doc text is kept verbatim; wrapping it would change what the model reads.
-"src/datamate/prompts.py" = ["E501"]
 "src/datamate/helpers.py" = ["E501"]
-"notebooks/*" = ["E501"]
+# Notebooks: prompt text kept verbatim; names from run_lib_cells are invisible to ruff.
+"notebooks/*" = ["E501", "F821"]

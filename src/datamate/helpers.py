@@ -10,12 +10,22 @@ from __future__ import annotations
 import datetime as _dt
 import math
 import re
+import unicodedata
 
 import pandas as pd
 
-from .text import fold
-
 # ---------------------------------------------------------------- text
+
+
+def fold(s) -> str:
+    """Lowercase, no accents (đ->d), single spaces: a matching key for text typed with or without
+    diacritics. Never use it to produce an answer. None / NaN fold to ''."""
+    if s is None or (isinstance(s, float) and math.isnan(s)):
+        return ""
+    s = unicodedata.normalize("NFD", str(s).replace("đ", "d").replace("Đ", "D"))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+    return re.sub(r"\s+", " ", s).strip()
+
 
 def same_text(a, b) -> bool:
     """True when two names differ only in case, accents, spacing or punctuation."""
@@ -163,16 +173,17 @@ def dates(series, year: int | None = None) -> pd.Series:
 
 # ---------------------------------------------------------------- order tables
 
-def ffill_orders(df: pd.DataFrame, order_col: str, cols: list[str] | None = None) -> pd.DataFrame:
+def ffill_orders(df: pd.DataFrame, order_col: str, cols: list[str] | None = None,
+                 min_blank: float = 0.9) -> pd.DataFrame:
     """Lines whose order id is blank belong to the order above: fill the id and the order-level `cols`
-    (default: every column that is blank on follow-up lines) down. Returns a copy."""
+    down from the order's first line. Default `cols`: columns blank on at least `min_blank` of the
+    follow-up lines (a few stray values on follow-up lines must not stop the fill). Returns a copy."""
     out = df.copy()
     blank = out[order_col].isna() | (out[order_col].astype(str).str.strip() == "")
     group = (~blank).cumsum()
     if cols is None:
-        cols = [c for c in out.columns if out.loc[blank, c].isna().all()] if blank.any() else []
+        cols = [c for c in out.columns if blank.any() and out.loc[blank, c].isna().mean() >= min_blank]
     for c in set(cols) | {order_col}:
-        out[c] = out[c].where(~(out[c].isna() & blank), None)
         out[c] = out.groupby(group)[c].transform("first")
     return out
 
@@ -193,9 +204,15 @@ def lunar_to_solar(calendar: pd.DataFrame, lunar_day: int, lunar_month: int, lun
     return pd.Timestamp(hit.iloc[0]["date"]) if len(hit) else pd.NaT
 
 
+# parse_* are the names prompts from v3 on use: v2's logs showed the model mixing our to_datetime
+# up with pandas' (pd.to_datetime(..., year=2026)). The to_* names stay for the v1/v2 prompts.
+parse_number, parse_qty, parse_money = to_number, to_qty, money
+parse_date, parse_datetime, parse_dates = to_date, to_datetime, dates
+
 EXPORTS = {name: globals()[name] for name in [
     "fold", "same_text", "to_number", "to_qty", "money", "year_of", "to_datetime", "to_date", "dates",
-    "ffill_orders", "dedupe_order_lines", "lunar_to_solar"]}
+    "ffill_orders", "dedupe_order_lines", "lunar_to_solar",
+    "parse_number", "parse_qty", "parse_money", "parse_date", "parse_datetime", "parse_dates"]}
 
 DOC = """# Helpers already defined (use them instead of writing your own parsers)
 - to_number(x) -> float|nan: money/number cells: 55000, '55.000đ', '35,000', '55k', '2,825tr', '1tr312'(=1312000), '2 tỷ'. money(series) applies it to a column.
@@ -203,5 +220,14 @@ DOC = """# Helpers already defined (use them instead of writing your own parsers
 - to_date(x, year=None) / to_datetime(x, year=None) -> Timestamp|NaT: datetime objects, Excel serials, ISO (never day-first), '01/04/2025', '1 thg 6 2025', and '1/4' or '1 thg 4' when you pass year (year_of(sheet_name) reads it from 'T04-2025', '07.2026'). dates(series, year=None) applies to_date to a column.
 - fold(s): lowercase, no accents, single spaces, for matching names typed without diacritics. same_text(a, b): equal up to case/accents/spacing/punctuation.
 - ffill_orders(df, order_col, cols=None): fill the order id and order-level cells down onto follow-up lines of the same order. dedupe_order_lines(df, order_col): drop exact duplicate lines (call after ffill_orders).
+- lunar_to_solar(calendar, lunar_day, lunar_month, lunar_year, leap=False) -> Timestamp: solar date of a lunar date.
+"""
+
+DOC_V3 = """# Helpers already defined (only for raw cells that have no parsed column)
+- parse_number(x) -> float|nan: money/number cells: 55000, '55.000đ', '35,000', '55k', '2,825tr', '1tr312'(=1312000), '2 tỷ'. parse_money(series) applies it to a column.
+- parse_qty(x) -> float|nan: quantity cells: 2, '1 bình', '2,5 kg' (unit dropped; the unit is in its own column).
+- parse_date(x, year=None) / parse_datetime(x, year=None) -> Timestamp|NaT: every date spelling in these files; pass year (year_of(table_key)) for '1/4'. parse_dates(series, year=None) applies parse_date to a column.
+- fold(s): lowercase, no accents, single spaces, for matching names typed without diacritics. same_text(a, b): equal up to case/accents/spacing/punctuation.
+- dedupe_order_lines(df, order_col): drop lines identical in every cell within the same order.
 - lunar_to_solar(calendar, lunar_day, lunar_month, lunar_year, leap=False) -> Timestamp: solar date of a lunar date.
 """

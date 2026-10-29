@@ -6,7 +6,8 @@ import pytest
 
 from datamate.helpers import (dedupe_order_lines, ffill_orders, fold, lunar_to_solar, same_text, to_date,
                               to_datetime, to_number, to_qty, year_of)
-from datamate.io import split_dir
+
+from .conftest import TRAIN
 
 
 # Spellings seen in the released data (EDA section 6) plus a few neighbours.
@@ -73,6 +74,13 @@ def test_ffill_then_dedupe_keeps_identical_lines_of_different_orders():
 
 
 def test_lunar_to_solar_matches_known_tet():
-    cal = pd.read_csv(split_dir("train") / "calendar.csv")
+    cal = pd.read_csv(TRAIN / "calendar.csv")
     assert str(lunar_to_solar(cal, 1, 1, 2025).date()) == "2025-01-29"   # Tết Ất Tỵ
     assert str(lunar_to_solar(cal, 1, 1, 2026).date()) == "2026-02-17"   # Tết Bính Ngọ
+
+
+def test_ffill_tolerates_stray_values_on_follow_up_lines():
+    ids = ["A"] + [None] * 10 + ["B"] + [None] * 10
+    cust = ["Lan"] + [None] * 9 + ["Lan"] + ["Tú"] + [None] * 10      # one stray name on A's follow-ups
+    f = ffill_orders(pd.DataFrame({"ma": ids, "khach": cust, "hang": list("xyzxyzxyzxyzxyzxyzxyzx")}), "ma")
+    assert f.khach.tolist() == ["Lan"] * 11 + ["Tú"] * 11
