@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+.venv/
+outputs/
+runs/
+.pytest_cache/
+*.egg-info/
+notebooks/*.ipynb

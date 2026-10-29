@@ -1,0 +1,37 @@
+[project]
+name = "datamate"
+version = "0.1.0"
+description = "Zalo AI Challenge 2026 — DataMate: Vietnamese QA over messy tabular data"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+llm = ["vllm==0.32.0", "ninja"]
+retrieval = ["sentence-transformers"]   # only for --rule-retriever dense / hybrid
+dev = ["pytest", "ruff", "jupytext", "nbconvert", "nbclient", "ipykernel", "matplotlib"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.jupytext]
+formats = "ipynb,py:percent"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt and helper-doc text is kept verbatim; wrapping it would change what the model reads.
+"src/datamate/prompts.py" = ["E501"]
+"src/datamate/helpers.py" = ["E501"]
+"notebooks/*" = ["E501"]

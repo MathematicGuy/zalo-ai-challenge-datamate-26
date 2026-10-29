@@ -1,0 +1,215 @@
+{
+ "note": "Hand labels by Claude (2026-10-28): train rulebook rows that change how each question is computed; §9 format rows excluded. Annotation on train only (regulations §4.2).",
+ "labels": {
+  "q_c4dadd843270": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Tháng M/Y",
+   "Đơn vị cơ bản, đơn vị lớn"
+  ],
+  "q_189cb0ae43e6": [
+   "Ngày X, hôm nay, hôm qua",
+   "Đơn tính vào doanh thu",
+   "Doanh thu một đơn"
+  ],
+  "q_7bbd5b2b5ad7": [
+   "Tỉ lệ đơn huỷ trong kỳ",
+   "Tháng M/Y"
+  ],
+  "q_1c4d072b63b0": [
+   "Tuần",
+   "Ca sáng, ca chiều",
+   "Số đơn"
+  ],
+  "q_53c1b3b3781d": [
+   "Giá trị trung bình một đơn",
+   "Số đơn",
+   "Doanh thu một đơn"
+  ],
+  "q_cea423d7b2f3": [
+   "Nợ thêm, trả nợ, thu nợ trong kỳ",
+   "Tháng M/Y"
+  ],
+  "q_b0728619f5b4": [
+   "Hiệu ứng tăng giá",
+   "Phần trăm thay đổi, tăng trưởng"
+  ],
+  "q_c21e991a58fc": [
+   "Tuần",
+   "Giá trị trung bình một đơn",
+   "Doanh thu một đơn"
+  ],
+  "q_12952a011018": [
+   "Giá nhập bình quân một mặt hàng trong tháng",
+   "Tháng M/Y"
+  ],
+  "q_9bb2953b4c71": [
+   "Giá bán X ngày D",
+   "Ngày X, hôm nay, hôm qua"
+  ],
+  "q_2a79a2115ada": [
+   "Hàng hết hạn trong N ngày tới"
+  ],
+  "q_bd2d824bb0a9": [
+   "Doanh thu theo nhóm khách",
+   "Tháng M/Y"
+  ],
+  "q_c956ab727960": [
+   "Tỉ lệ đơn huỷ trong kỳ",
+   "Tháng M/Y"
+  ],
+  "q_4a434843d4e6": [
+   "Bán được bao nhiêu tiền, thu về bao nhiêu tiền",
+   "Đơn tính vào doanh thu",
+   "Tháng M/Y"
+  ],
+  "q_cb53a756a9ec": [
+   "Bán được bao nhiêu tiền, thu về bao nhiêu tiền",
+   "Đơn tính vào doanh thu",
+   "Tháng M/Y"
+  ],
+  "q_b7846d205f52": [
+   "Thuốc kê đơn",
+   "Bán được bao nhiêu tiền, thu về bao nhiêu tiền"
+  ],
+  "q_08f6d5ef7cce": [
+   "Đơn bị huỷ",
+   "Trạng thái đơn",
+   "Tháng M/Y"
+  ],
+  "q_2889186ce0d8": [
+   "Giá nhập bình quân một mặt hàng trong tháng",
+   "Tháng M/Y"
+  ],
+  "q_d81abc9c0964": [
+   "Tuần",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_9c455280e2d6": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Đơn vị cơ bản, đơn vị lớn",
+   "Tháng M/Y"
+  ],
+  "q_348e083e71aa": [
+   "Doanh thu theo nhóm khách",
+   "Tháng M/Y"
+  ],
+  "q_3391a2ab7a86": [
+   "Doanh thu theo hình thức thanh toán",
+   "Tháng này"
+  ],
+  "q_a9090ef32085": [
+   "Nhóm hàng",
+   "Bán được bao nhiêu tiền, thu về bao nhiêu tiền",
+   "Tháng M/Y"
+  ],
+  "q_ccce4aa278a6": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Đơn vị cơ bản, đơn vị lớn",
+   "Tháng M/Y"
+  ],
+  "q_2345a0429e0d": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Đơn vị cơ bản, đơn vị lớn",
+   "Tháng M/Y"
+  ],
+  "q_d43085fae456": [
+   "Tháng M/Y",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_773310350f81": [
+   "Bán chạy",
+   "Tuần",
+   "Mặt hàng"
+  ],
+  "q_409cf8f109ac": [
+   "Giá trị trung bình một đơn",
+   "Doanh thu một đơn",
+   "Tháng M/Y"
+  ],
+  "q_1c2e8610ac47": [
+   "Phần trăm thay đổi, tăng trưởng",
+   "Tháng M/Y"
+  ],
+  "q_445aa67d4d59": [
+   "Ngày X, hôm nay, hôm qua",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_32f8d2aac7f9": [
+   "Số đơn",
+   "Quá N, hơn N, trên N, dưới N",
+   "Mặt hàng"
+  ],
+  "q_0ed6031586cc": [
+   "Hàng hết hạn trong N ngày tới"
+  ],
+  "q_7095290807ca": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Size M, size L",
+   "Tháng M/Y"
+  ],
+  "q_8b6ed12da21d": [
+   "Đơn tính vào doanh thu",
+   "Tháng M/Y",
+   "date"
+  ],
+  "q_8d6f15428234": [
+   "Xác định khách",
+   "Tháng M/Y"
+  ],
+  "q_ce030a6717ff": [
+   "Bán được bao nhiêu tiền, thu về bao nhiêu tiền",
+   "Mặt hàng",
+   "Tháng M/Y"
+  ],
+  "q_0872d9f34f31": [
+   "Phần trăm thay đổi, tăng trưởng",
+   "Tháng M/Y"
+  ],
+  "q_7931f49fa47c": [
+   "Bán được bao nhiêu <đơn vị>",
+   "Ngày X, hôm nay, hôm qua"
+  ],
+  "q_16d431fce5d6": [
+   "Số đơn",
+   "Xác định khách",
+   "Quá N, hơn N, trên N, dưới N"
+  ],
+  "q_93df63dc4a7b": [
+   "Ngày X, hôm nay, hôm qua",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_cec26efee6e1": [
+   "Nhóm hàng",
+   "Tháng M/Y"
+  ],
+  "q_bd5285a7fb12": [
+   "Ngày X, hôm nay, hôm qua",
+   "Số đơn"
+  ],
+  "q_d2f6aa4cb04b": [
+   "Đơn bị huỷ",
+   "Trạng thái đơn",
+   "Tháng M/Y"
+  ],
+  "q_535b3fe8faed": [
+   "Tháng M, quý Q không ghi năm",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_3e8bb94b9cf9": [
+   "Tháng này",
+   "Đơn tính vào doanh thu"
+  ],
+  "q_b0ff97ca1db9": [
+   "Tuần",
+   "Bán được bao nhiêu <đơn vị>"
+  ],
+  "q_6983f7ef59e6": [
+   "Giá nhập bình quân một mặt hàng trong tháng",
+   "Tháng M/Y"
+  ],
+  "q_8d68a52cc63c": [
+   "Nhóm hàng",
+   "Tháng M/Y"
+  ]
+ }
+}
