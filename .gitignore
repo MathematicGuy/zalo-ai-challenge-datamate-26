@@ -3,6 +3,32 @@ __pycache__/
 *.pyc
 .venv/
 outputs/
-runs/
 .pytest_cache/
 *.egg-info/
+
+# SQL baseline model weights
+sqlbase/models/
+
+# Run outputs and logs stay within the team; only the scripts under runs/analysis are code
+runs/*
+!runs/analysis/
+runs/analysis/*
+!runs/analysis/*.py
+!runs/analysis/*.sh
+runs/analysis/predict_pre_*.py
+runs/analysis/agent_v*_backup.py
+
+# The LoRA adapter the team runs, in Git LFS (.gitattributes); checkpoints stay local
+!runs/lora/
+runs/lora/*
+!runs/lora/sql_rft_v2/
+runs/lora/sql_rft_v2/*
+!runs/lora/sql_rft_v2/adapter/
+
+# Few-shot banks hold train questions (regulations 4.3); only the one behind the 0.491 setup is shared, inside the team
+sqlbase/fewshot_bank*.jsonl
+!sqlbase/fewshot_bank24.jsonl
+
+# Generated, or of unchecked origin
+unsloth_compiled_cache/
+code.zip
