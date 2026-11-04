@@ -62,7 +62,7 @@ Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng s
 | LoRA v2, few-shot, macro công nợ (`runs/analysis/run_v2_public.sh`) | 0.491 |
 | Thêm `qty` theo đơn vị cơ bản | 0.506 |
 | Thêm trả lời `unanswerable` theo đa số | 0.516 |
-| Thêm chuẩn hóa tên và hệ số từ giá (`sqlbase/run_public.sh`) | Chưa có điểm |
+| Sinh mẫu mới, thêm chuẩn hóa tên và hệ số từ giá (`sqlbase/run_public.sh`) | 0.60 |
 
 Mỗi lần chạy sinh mẫu mới nên điểm có thể lệch nhẹ.
 
