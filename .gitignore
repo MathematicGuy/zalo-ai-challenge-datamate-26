@@ -24,6 +24,9 @@ runs/lora/*
 !runs/lora/sql_rft_v2/
 runs/lora/sql_rft_v2/*
 !runs/lora/sql_rft_v2/adapter/
+!runs/lora/sql_rft_v3/
+runs/lora/sql_rft_v3/*
+!runs/lora/sql_rft_v3/adapter/
 
 # Few-shot banks hold train questions (regulations 4.3); only the one behind the 0.491 setup is shared, inside the team
 sqlbase/fewshot_bank*.jsonl
@@ -32,3 +35,4 @@ sqlbase/fewshot_bank*.jsonl
 # Generated, or of unchecked origin
 unsloth_compiled_cache/
 code.zip
+litreview-*.pdf

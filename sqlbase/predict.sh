@@ -7,12 +7,14 @@ export TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=0
 export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 DATA="${DATA_DIR:-/data}" OUT="${RESULT_DIR:-/result}"
 NG="${NUM_GPUS:-$(nvidia-smi -L | wc -l)}"
+ENGINE="${ENGINE:-{\"kv_cache_dtype\":\"fp8\",\"max_num_seqs\":128,\"max_num_batched_tokens\":8192,\"attention_backend\":\"TRITON_ATTN\"\}}"
 mkdir -p "$OUT/logs"
 for i in $(seq 0 $((NG - 1))); do
   CUDA_VISIBLE_DEVICES=$i timeout --signal=TERM --kill-after=15s "${TIMEOUT_SECONDS:-21000}s" \
     python3 predict.py --data "$DATA" --output "$OUT/shard$i" --shard "$i/$NG" \
-    --model "${MODEL_DIR:-/models/Qwen3-14B}" --quant "${QUANT:-fp8}" --k 8 --think-k 4 --deadline "$(( ${TIMEOUT_SECONDS:-21000} - 900 ))" --gpu-mem 0.92 \
-    --engine '{"kv_cache_dtype":"fp8","max_num_seqs":64,"max_num_batched_tokens":4096}' "$@" > "$OUT/logs/_shard$i.txt" 2>&1 &
+    --model "${MODEL_DIR:-/models/Qwen3.5-9B}" --quant "${QUANT:-fp8}" --k 8 --think-k 4 --deadline "$(( ${TIMEOUT_SECONDS:-21000} - 900 ))" --gpu-mem "${GPU_MEM:-0.92}" \
+    --lora "${LORA_DIR:-/models/lora}" --lora-thinking --fewshot fewshot_bank24.jsonl --debt-views --debt-route --canon-names --answer-unanswerable \
+    --engine "$ENGINE" "$@" > "$OUT/logs/_shard$i.txt" 2>&1 &
 done
 wait
 python3 - "$DATA" "$OUT" "$NG" <<'EOF'

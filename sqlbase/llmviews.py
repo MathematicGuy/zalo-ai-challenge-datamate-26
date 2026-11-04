@@ -17,8 +17,8 @@ Write ONE read-only DuckDB SELECT (WITH allowed) returning one row per sold line
   product_code  item code of the line, NULL if none
   product_group product group / category of the item (nhóm hàng, loại, danh mục) from the line or the catalog, NULL if none
   product_name  item / service name of the line (full name from a product catalog when the line only has a code or abbreviation), NULL if none
-  qty           quantity sold on the line, as recorded
-  unit          unit of qty, NULL if none
+  qty           quantity sold on the line in the item's BASE UNIT (đơn vị cơ bản): a column already holding the converted quantity if the line table has one, otherwise the recorded quantity times the factor for the line's unit from the conversion table, catalog or README; an item with one unit keeps the recorded quantity
+  unit          base unit of qty, NULL if none
   amount        line revenue in VND after line-level discounts, before order-level vouchers, without VAT/shipping
   customer_id   customer code / member card id when the shop records one (mã khách, mã thẻ ...), NULL otherwise and for walk-ins
   customer_name customer name; NULL for walk-in customers (khách lẻ, kl, lẻ, vãng lai, blank), matched in any case/spacing: lower(trim(x)) IN ('khách lẻ', ...)
@@ -36,6 +36,78 @@ COLS = """CAST(order_id AS VARCHAR) AS order_id, CAST(order_date AS DATE) AS ord
   coalesce(CAST(is_cancelled AS BOOLEAN), false) AS line_cancelled, coalesce(CAST(is_returned AS BOOLEAN), false) AS line_returned,
   lower(trim(CAST(line_kind AS VARCHAR))) AS line_kind"""
 REV = "line_kind IN ('item', 'service')"
+
+
+QTY_SYSTEM = """You correct one column of a shop's canonical sales view, a DuckDB SELECT. qty must be the quantity of each line in the item's BASE UNIT (đơn vị cơ bản, the smallest unit the shop counts).
+Choose the first that applies, reading README and SCHEMA:
+1. The line table has a column already holding the converted quantity: use it.
+2. A conversion table or catalog gives a factor per item and unit: recorded quantity times the factor when the line is in the larger unit, times 1 when it is already in the base unit. Match on the item and on the line's unit.
+3. README writes the factors: use a CASE on item and unit.
+4. Every item has one unit: keep qty as it is.
+Change only qty, and joins it needs. Keep every other column, its name and every row: no join may add or drop lines. Use only tables and columns listed in SCHEMA, double-quoted.
+Think briefly, then answer with the whole SELECT in one ```sql``` block."""
+
+
+def qty_chat(rulebook, readme, schema, sql):
+    rules = "\n".join(line for line in rulebook.splitlines() if "đơn vị cơ bản" in line.lower())
+    return [{"role": "system", "content": QTY_SYSTEM}, {"role": "user", "content": f"RULEBOOK LINES ON UNITS:\n{rules}\n\nREADME:\n{readme}\n\nSCHEMA:\n{schema}\n\nCURRENT VIEW:\n```sql\n{sql}\n```"}]
+
+
+def _facts(db, sql):
+    return db.execute(f"SELECT COUNT(*), COUNT(DISTINCT order_id), SUM(TRY_CAST(amount AS DOUBLE)), COUNT(qty) FROM ({sql})").fetchone()
+
+
+def qty_check(db, old, new):
+    """None when the new view keeps the lines, orders and revenue of the old one and only raises qty; otherwise the problem, for the repair turn."""
+    try:
+        a, b = _facts(db, old), _facts(db, new)
+    except Exception as e:
+        return f"the query fails: {str(e)[:300]}"
+    if a[0] != b[0]:
+        return f"the view has {b[0]} rows, the current view has {a[0]}: a join adds or drops lines"
+    if a[1] != b[1]:
+        return f"the view has {b[1]} orders, the current view has {a[1]}"
+    if abs((a[2] or 0) - (b[2] or 0)) > 0.5:
+        return f"total amount changed from {a[2]} to {b[2]}: keep amount as it is"
+    if a[3] and b[3] < 0.99 * a[3]:
+        return f"qty is NULL on {a[3] - b[3]} more lines than before: lines with no factor keep the recorded quantity"
+    if a[3]:
+        low = db.execute(f"SELECT COUNT(*) FROM (SELECT SUM(TRY_CAST(qty AS DOUBLE)) AS q, order_id, product_name FROM ({old}) GROUP BY 2, 3) o JOIN (SELECT SUM(TRY_CAST(qty AS DOUBLE)) AS q, order_id, product_name FROM ({new}) GROUP BY 2, 3) n USING (order_id, product_name) WHERE n.q < o.q - 1e-6").fetchone()[0]
+        if low > 0.01 * a[0]:
+            return f"qty fell on {low} order lines: a base-unit quantity is never below the recorded one"
+        moved, items, ex = base_lines_moved(db, old, new)
+        if items and moved > 0.2 * items:
+            return f"on {moved} of {items} items sold in several units the quantity of the smallest unit changed, for example {ex}: lines already in the base unit keep the recorded quantity, and do not add columns that hold the same quantity"
+    spread, items, ex = unit_spread(db, new)
+    if spread and items >= 2 and spread > 2:
+        return f"price per qty differs by {spread:.1f} times between units of the same item over {items} items, worst {ex}: qty is not yet in one base unit. Compare unit text ignoring case and spaces, and convert every larger unit"
+    return None
+
+
+def unit_spread(db, sql):
+    """(median over items sold in 2+ units of highest / lowest price per qty, number of such items, the worst item). With qty in one base unit an item's price per qty is
+    about the same on every unit; a large spread means some lines were not converted."""
+    rows = db.execute(f"""WITH t AS (SELECT product_name p, lower(trim(unit)) u, SUM(TRY_CAST(amount AS DOUBLE)) / NULLIF(SUM(TRY_CAST(qty AS DOUBLE)), 0) price FROM ({sql})
+        WHERE TRY_CAST(qty AS DOUBLE) > 0 AND TRY_CAST(amount AS DOUBLE) > 0 AND product_name IS NOT NULL AND unit IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) >= 3)
+        SELECT p, MAX(price) / MIN(price) r FROM t WHERE price > 0 GROUP BY p HAVING COUNT(*) >= 2 ORDER BY r""").fetchall()
+    if not rows:
+        return None, 0, None
+    return rows[len(rows) // 2][1], len(rows), rows[-1][0]
+
+
+def base_lines_moved(db, old, new):
+    """Items sold in 2+ units whose smallest-unit lines changed quantity, as (count of such items, of all, an example): lines already in the base unit keep the recorded quantity."""
+    q = lambda s: f"SELECT product_name p, lower(trim(unit)) u, SUM(TRY_CAST(qty AS DOUBLE)) q FROM ({s}) WHERE TRY_CAST(qty AS DOUBLE) > 0 AND unit IS NOT NULL GROUP BY 1, 2"
+    rows = db.execute(f"""WITH j AS (SELECT o.p, o.u, n.q / o.q r FROM ({q(old)}) o JOIN ({q(new)}) n ON o.p = n.p AND o.u = n.u)
+        SELECT p, MIN(r) m FROM j GROUP BY p HAVING COUNT(*) >= 2""").fetchall()
+    bad = [p for p, m in rows if abs(m - 1) > 0.01]
+    return len(bad), len(rows), (bad[0] if bad else None)
+
+
+def qty_report(db, old, new):
+    a = db.execute(f"SELECT SUM(TRY_CAST(qty AS DOUBLE)), COUNT(qty) FROM ({old})").fetchone()
+    b = db.execute(f"SELECT SUM(TRY_CAST(qty AS DOUBLE)), COUNT(qty) FROM ({new})").fetchone()
+    return f"qty total {a[0]} -> {b[0]}, non-null {a[1]} -> {b[1]}"
 
 
 def parse_select(text):
@@ -108,6 +180,19 @@ def raw_values(db):
     return _raw[key]
 
 
+def missed_names(db, prefix, where, limit=4):
+    """The commonest item names a catalog join missed, and the column of the shop's tables that writes each one: what a repair needs to see."""
+    names = db.execute(f"SELECT product_name, count(*) FROM {prefix}sales_all WHERE line_kind = 'item' AND product_name IS NOT NULL AND {where} "
+                       f"GROUP BY 1 ORDER BY 2 DESC LIMIT {limit}").fetchall()
+    cols = db.execute("SELECT table_name, column_name FROM information_schema.columns WHERE data_type = 'VARCHAR' AND table_name <> 'calendar' "
+                      "AND NOT starts_with(table_name, 'v_') AND NOT starts_with(table_name, '_cand_') AND NOT starts_with(column_name, '_') ORDER BY 1, 2").fetchall()
+    said = []
+    for name, n in names:
+        at = [f'"{tab}"."{col}"' for tab, col in cols if db.execute(f"""SELECT 1 FROM "{tab}" WHERE lower(trim("{col}")) = lower(trim(?)) LIMIT 1""", [name]).fetchone()]
+        said.append(f"'{name}' ({n} lines, written in {', '.join(at[:3]) or 'no column'})")
+    return ". Missed lines: " + "; ".join(said) if said else ""
+
+
 def catalog_test(db, prefix):
     """Drafting only (a reused view is not re-judged): a product_group constant no table holds ('khác', 'không rõ'), or a
     NULL group on part of the lines, stands for the lines the catalog join missed, so every per-group question loses them."""
@@ -115,12 +200,13 @@ def catalog_test(db, prefix):
     made = [(g, n) for g, n in db.execute(f"SELECT product_group, count(*) FROM {prefix}sales_all WHERE line_kind = 'item' AND product_group IS NOT NULL "
                                           "GROUP BY 1 ORDER BY 2 DESC").fetchall() if g.strip().lower() not in raw_values(db)]
     if sum(n for _, n in made) > 0.02 * rows:
+        where = "product_group IN (" + ", ".join("'" + g.replace("'", "''") + "'" for g, _ in made) + ")"
         raise ValueError(f"product_group '{made[0][0]}' is on {made[0][1]} lines but is no value of any table: those lines did not match the "
-                         "catalog; match it on every way a line names the item (code or abbreviation, and full name)")
+                         "catalog; match it on every way a line names the item (code or abbreviation, and full name)" + missed_names(db, prefix, where))
     nul = db.execute(f"SELECT avg(CAST(product_group IS NULL AS INT)) FROM {prefix}sales_all WHERE line_kind = 'item'").fetchone()[0] or 0
     if 0.02 < nul < 1:  # some lines have a group, others none: the same missed join, written as NULL
         raise ValueError(f"product_group is NULL on {nul:.0%} of item lines while the other lines have one: those lines did not match the "
-                         "catalog; match it on every way a line names the item (code or abbreviation, and full name)")
+                         "catalog; match it on every way a line names the item (code or abbreviation, and full name)" + missed_names(db, prefix, "product_group IS NULL"))
 
 
 def check(db, texts):
@@ -141,6 +227,46 @@ def check(db, texts):
     for n in ("sales_all", "sales", "orders_all", "orders"):
         db.execute(f"DROP TABLE IF EXISTS _cand_{n}")
     return out
+
+
+def qty_by_price(sql):
+    """The view's SELECT with qty in base units, the factors read from the prices: on one item, a unit priced k times its
+    cheapest unit holds k of them. For a shop whose qty repair keeps failing unit_spread, so no conversion table is needed."""
+    return f"""WITH _b AS ({sql}),
+_p AS (SELECT product_name AS n, lower(trim(unit)) AS u, median(amount / qty) AS pr FROM _b WHERE qty > 0 AND amount > 0 AND product_name IS NOT NULL GROUP BY 1, 2),
+_k AS (SELECT n, u, greatest(1, round(pr / min(pr) OVER (PARTITION BY n))) AS k FROM _p)
+SELECT _b.* REPLACE (_b.qty * coalesce(_k.k, 1) AS qty) FROM _b LEFT JOIN _k ON _b.product_name = _k.n AND lower(trim(_b.unit)) = _k.u"""
+
+
+def pick_soft(db, texts):
+    """No draft passed: the drafts that only failed the catalog test still map dates, orders, amounts and quantities, and the
+    questions that need none of the groups outnumber the ones that do. Most common fingerprint, built, or (None, 0)."""
+    fps = {}
+    for t in texts:
+        for part in reversed(t.split("\n#REPAIR\n")):
+            try:
+                sql = parse_select(part)
+                fps.setdefault(build(db, sql, "_cand_"), []).append(sql)
+                break
+            except Exception:
+                continue
+    for n in ("sales_all", "sales", "orders_all", "orders"):
+        db.execute(f"DROP TABLE IF EXISTS _cand_{n}")
+    if not fps:
+        return None, 0
+    sqls = max(fps.values(), key=len)
+    rank = {}
+    for s in dict.fromkeys(sqls):  # same numbers: prefer the draft whose catalog join holds, then the one filling the most lines
+        build(db, s)
+        try:
+            catalog_test(db, "v_")
+            ok = 1
+        except ValueError:
+            ok = 0
+        rank[s] = ok, db.execute("SELECT count(product_group) + count(product_code) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]
+    best = max(rank, key=rank.get)
+    build(db, best)
+    return best, len(sqls)
 
 
 def pick(db, checked):
@@ -169,7 +295,7 @@ def describe(db, sql, n, k):
     return (f'"v_sales" ({nv} rows) = item/service lines of VALID orders only (not cancelled, no returned line): revenue = SUM(amount), no status filter needed.\n'
             f'"v_orders" ({no} rows) = VALID orders only, one row per order: order_id, order_date, order_ts, customer_key, customer_name, staff, channel, payment, revenue, n_lines.\n'
             '"v_sales_all" / "v_orders_all" = every line / order with is_cancelled, is_returned, is_valid, line_kind (item|service|adjust).\n'
-            "v_sales columns: order_id, order_date, order_ts, product_code, product_group, product_name, qty, unit, amount, customer_key, customer_name, staff, channel, payment, line_kind.\n"
+            "v_sales columns: order_id, order_date, order_ts, product_code, product_group, product_name, qty, unit, amount, customer_key, customer_name, staff, channel, payment, line_kind. qty is already in base units: for best sellers and quantities sold, use SUM(qty) and do not convert again.\n"
             "Customers (rulebook): one customer = one customer_key (the customer code, else the name ignoring case/accents/spaces/punctuation); customer_name = its usual spelling; "
             "both NULL for walk-ins, who are no customer. Count customers with COUNT(DISTINCT customer_key), rank them GROUP BY customer_key and answer with customer_name."
             + (f" Always NULL here: {', '.join(empty)}." if empty else "")

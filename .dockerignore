@@ -1,0 +1,9 @@
+# Allow-list: the image gets the code, the base model and the adapter, never the competition data or run outputs.
+*
+!sqlbase/*.py
+!sqlbase/*.json
+!sqlbase/predict.sh
+!sqlbase/requirements.txt
+!sqlbase/fewshot_bank24.jsonl
+!sqlbase/models/Qwen3.5-9B
+!runs/lora/sql_rft_v2/adapter

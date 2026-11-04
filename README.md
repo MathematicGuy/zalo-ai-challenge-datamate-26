@@ -1,14 +1,74 @@
 # DataMate — Zalo AI Challenge 2026
 
-An agent that answers everyday Vietnamese questions over a small business's messy spreadsheets
-(CSV / XLSX / SQLite), or abstains. Scored by Penalized Accuracy: +1 correct, 0 abstain, −1 wrong.
+Trả lời câu hỏi tiếng Việt trên dữ liệu bán hàng lộn xộn của từng shop, hoặc bỏ trống nếu không chắc. Chấm theo Penalized Accuracy: đúng +1, bỏ trống 0, sai −1.
 
-The tables are normalized once at load time (parsed date / money columns, fill-down, combined
-monthly sheets). Qwen3.5-9B writes pandas code over them, a sandbox runs it, K sampled programs vote,
-and the agent answers only when enough of them agree. Business rules are never hard-coded: each split
-ships its own `rulebook.md`, which goes into the prompt verbatim.
+Pipeline hiện tại nằm trong `sqlbase/`: Qwen3.5-9B kèm LoRA tự train viết nhiều câu SQL cho mỗi câu hỏi, chạy trên DuckDB rồi bỏ phiếu. Chi tiết ở [sqlbase/README.md](sqlbase/README.md).
 
-## Layout
+Repo này chỉ dành cho thành viên trong đội. Quy chế §4.3 và §8.2 cấm chia sẻ code và dữ liệu ra ngoài đội.
+
+## Chạy nhanh
+
+Cần: GPU từ 24 GB (đã chạy trên 1 RTX PRO 4000 Blackwell 24 GB, RAM 30 GB), Python 3.12, `git-lfs`, khoảng 30 GB đĩa.
+
+```bash
+# 1. Lấy code và LoRA (LoRA nằm trong Git LFS)
+git clone git@github.com:hugebenevolence/zalo-ai-challenge-datamate-26.git
+cd zalo-ai-challenge-datamate-26
+git lfs install && git lfs pull
+
+# 2. Cài thư viện
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r sqlbase/requirements.txt
+
+# 3. Tải model gốc, khoảng 19 GB
+hf download Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a --local-dir sqlbase/models/Qwen3.5-9B
+
+# 4. Đặt dữ liệu của BTC vào data/ (không có trong repo)
+#    data/public_test/{questions.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
+#    data/train/{questions.jsonl,answers.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
+
+# 5. Chạy public, khoảng 2 giờ trên một GPU 24 GB
+bash sqlbase/run_public.sh runs/my_run
+# File để nộp: runs/my_run/submission.jsonl
+```
+
+GPU khác cấu hình thì chỉnh bằng biến môi trường, ví dụ `GPU_MEM=0.85 bash sqlbase/run_public.sh runs/my_run`. Hết bộ nhớ thì giảm `max_num_seqs` trong biến `ENGINE`.
+
+### Docker
+
+```bash
+docker build -f sqlbase/Dockerfile -t datamate .
+docker run --rm --gpus all --network none -v /duong/dan/split:/data:ro -v "$PWD/result:/result" datamate
+```
+
+Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng shop và ghi `/result/submission.jsonl`. Trước khi build phải làm xong bước 1 và 3.
+
+## Trọng số
+
+| Thành phần | Nguồn | Dung lượng |
+|---|---|---|
+| Qwen3.5-9B | Hugging Face, lệnh ở bước 3; không đưa vào repo vì quá lớn cho Git LFS | Khoảng 19 GB |
+| LoRA v2 | `runs/lora/sql_rft_v2/adapter`, qua Git LFS | 185 MB |
+| Bộ ví dụ few-shot | `sqlbase/fewshot_bank24.jsonl` | Trong repo |
+| View và lớp công nợ đã lưu của public | `sqlbase/config_v4_public` | Trong repo |
+| LoRA v3 | Đang train; khi có sẽ nằm ở `runs/lora/sql_rft_v3/adapter`, dùng bằng `LORA_DIR=runs/lora/sql_rft_v3/adapter` | |
+
+## Điểm public
+
+| Bản | Điểm |
+|---|---|
+| LoRA v2, few-shot, macro công nợ (`runs/analysis/run_v2_public.sh`) | 0.491 |
+| Thêm `qty` theo đơn vị cơ bản | 0.506 |
+| Thêm trả lời `unanswerable` theo đa số | 0.516 |
+| Thêm chuẩn hóa tên và hệ số từ giá (`sqlbase/run_public.sh`) | Chưa có điểm |
+
+Mỗi lần chạy sinh mẫu mới nên điểm có thể lệch nhẹ.
+
+## Pipeline notebook cũ (Gemma/pandas, không còn dùng)
+
+Public cao nhất 0.25. Giữ lại để tham khảo; phần dưới mô tả pipeline đó, không phải `sqlbase/`.
+
+### Layout
 
 ```
 notebooks/
@@ -30,7 +90,7 @@ tests/                pytest, no GPU (scripted model for the end-to-end test)
 Cells tagged `lib` in 01 and 02 are the code; the other cells explore or run. 02 and 03 load the
 `lib` cells of the notebooks before them, so editing a function in 01 changes it everywhere.
 
-## Setup (server)
+### Setup (server)
 
 Needs CUDA ≥ 12.8 (Blackwell), Python 3.12.
 
@@ -44,19 +104,19 @@ hf download Qwen/Qwen3.5-9B             # ~19 GB, once
 Put the released zips in `data/` and unzip them there: `data/train/`, `data/public_test/`
 (`data/` is gitignored). The first run caches normalized tables in `data/cache/` (a few minutes).
 
-## Run
+### Run
 
 ```bash
 pytest -q                                                    # CPU only, ~15 s: everything but the LLM
 
-# 1. smoke test on the GPUs: 6 questions, 1 sample each
+## 1. smoke test on the GPUs: 6 questions, 1 sample each
 ./run.sh train runs/smoke -p IDS ../splits/smoke6.txt -p K 1
 
-# 2. validation: v3, and v2 on the same questions for comparison
+## 2. validation: v3, and v2 on the same questions for comparison
 ./run.sh train runs/v3_val300 -p IDS ../splits/val300.txt
 ./run.sh train runs/v2_val300 -p IDS ../splits/val300.txt -p PROMPT v2
 
-# 3. public test -> upload runs/v3_public/submission.jsonl
+## 3. public test -> upload runs/v3_public/submission.jsonl
 ./run.sh public_test runs/v3_public
 ```
 
@@ -76,7 +136,7 @@ the same questions, τ sweep, wrong answers with their code and output.
 **Send back** `runs/<run>/` (submission, logs, shard*.txt). They contain competition data: share them
 inside the team only.
 
-## Status (2026-10-30)
+### Status (2026-10-30)
 
 | version | validation | notes |
 |---|---|---|
@@ -88,7 +148,7 @@ inside the team only.
 Details: [docs/leaderboard.md](docs/leaderboard.md). The dev machine's GPU driver is down, so v3's
 first real numbers come from the server runs above.
 
-## Before committing
+### Before committing
 
 Notebook outputs contain competition data (regulations §4.3); a test fails if a committed notebook
 has outputs. Clear them first:
@@ -97,7 +157,7 @@ has outputs. Clear them first:
 jupyter nbconvert --clear-output --inplace notebooks/*.ipynb && pytest -q && ruff check src tests notebooks
 ```
 
-## Competition constraints this code respects
+### Competition constraints this code respects
 
 - Offline inference, ≤ 15B parameters in total (Qwen3.5-9B, Apache-2.0; optional embedders 0.6B).
 - Whole private test in ≤ 6 h on 2 × RTX 5090; answers are written per shop, so a timeout keeps them.

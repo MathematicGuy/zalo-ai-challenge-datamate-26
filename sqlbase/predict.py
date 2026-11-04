@@ -18,7 +18,9 @@ import fewshot
 import harness
 import llmviews
 import prompts
+import roles
 
+DEBT_CALL = re.compile(r"debt_(at|new|repaid)\s*\(")
 TYPES = ("number", "percent", "string", "date", "boolean", "list", "table", "unanswerable")
 
 SYSTEM = """You are an expert data analyst answering Vietnamese questions about one shop's data with ONE DuckDB SQL query.
@@ -166,6 +168,7 @@ def chat(system, biz_ctx, q, shots=""):
             + ("\n\nVALUES MATCHING THE QUESTION:\n" + "\n".join(hits) if hits else "")
             + ("\n\n" + q["_facts"] if q.get("_facts") else "")
             + ("\n\n" + shots if shots else "")
+            + ("\n\n" + q["_rules"] if q.get("_rules") else "")
             + f"\n\nQUESTION: {q['question']}" + (f"\n(abbreviations: {'; '.join(gloss)})" if gloss else ""))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -282,6 +285,21 @@ def repair_hint(err):
     return ""
 
 
+def answer_key(p):
+    """Two samples with the same key are one answer in the vote."""
+    a = p.get("answer")
+    num = p["type"] in ("number", "percent") and isinstance(a, (int, float)) and not isinstance(a, bool)
+    return json.dumps(["num", round(float(a), 2)] if num else p, ensure_ascii=False, default=str, sort_keys=True)
+
+
+def debt_pool(texts, start):
+    """Indices of the samples that vote. When most thinking samples (from `start`) call a debt macro, only the samples calling one do:
+    plain samples of a LoRA that never saw the macros answer debt questions from raw tables."""
+    uses = [bool(DEBT_CALL.search(t.split("\n#REPAIR\n")[-1])) for t in texts]
+    think = uses[start:]
+    return [j for j, u in enumerate(uses) if u] if think and sum(think) / len(think) >= .5 else list(range(len(texts)))
+
+
 def vote(preds, k):
     """Majority over executed answers; confidence = share of all K samples agreeing. A number and a percent of the same
     value are one answer: Qwen3.5 labels a % change either way (public: 38 abstains were such a split), so the group
@@ -290,9 +308,7 @@ def vote(preds, k):
     groups = defaultdict(list)
     for p in preds:
         if p:
-            a = p.get("answer")
-            num = p["type"] in ("number", "percent") and isinstance(a, (int, float)) and not isinstance(a, bool)
-            groups[dump(["num", round(float(a), 2)]) if num else dump(p)].append(p)
+            groups[answer_key(p)].append(p)
     if not groups:
         return {"type": "abstain"}, 0.0
     best = max(groups.values(), key=len)  # first seen on a tie, as Counter.most_common
@@ -323,6 +339,7 @@ def main():
     p.add_argument("--gpu-mem", type=float, default=0.9)
     p.add_argument("--quant")
     p.add_argument("--context", type=int, default=32768)
+    p.add_argument("--canon-names", action="store_true", help="write every name of a shop one way when loading it (ingest.canon_spellings)")
     p.add_argument("--views", choices=["llm", "none"], default="llm", help="canonical sales tables written by the LLM per shop (llmviews.py), or none")
     p.add_argument("--view-think", type=int, default=6144, help="thinking-mode token budget for the per-shop view stage (0 = no thinking)")
     p.add_argument("--views-from", type=Path, help="reuse the view SELECTs an earlier run chose (its logs/_views_<shop>.json) instead of drafting")
@@ -332,6 +349,11 @@ def main():
     p.add_argument("--prompt", choices=["v2", "v3"], default="v2", help="v3: the locked prompt of prompts.py on every sample")
     p.add_argument("--observe", action="store_true", help="after the samples ran, one greedy turn where each sample sees its result and keeps or corrects it (harness.py)")
     p.add_argument("--think-retry", action="store_true", help="a thinking sample that hit the budget is sampled again without thinking")
+    p.add_argument("--reader", action="store_true", help="a greedy turn picks the rulebook lines each question needs; they go right before the question (roles.py)")
+    p.add_argument("--reviewer", action="store_true", help="where the voting samples disagree, a greedy thinking turn picks a candidate or rejects them all (roles.py)")
+    p.add_argument("--review-below", type=float, default=0.75, help="review when the largest answer group holds under this share of the voting samples")
+    p.add_argument("--answer-unanswerable", action="store_true", help="answer unanswerable when that is the voted group")
+    p.add_argument("--debt-route", action="store_true", help="when most thinking samples call a debt macro, only samples calling one vote")
     p.add_argument("--fewshot", type=Path, help="example bank (runs/analysis/build_fewshot_bank.py): the second half of the samples get similar train examples instead of the raw-tables prompt")
     p.add_argument("--fewshot-k", type=int, default=4)
     p.add_argument("--debt-views", action="store_true", help="canonical debt tables + debt_at(day) written by the LLM per shop (debtview.py)")
@@ -341,7 +363,7 @@ def main():
     p.add_argument("--max-tokens", type=int, default=1024)
     p.add_argument("--think-k", type=int, default=0, help="extra thinking-mode samples for questions whose vote share is below --think-below")
     p.add_argument("--think-below", type=float, default=0.75)
-    p.add_argument("--think-budget", type=int, default=4096)
+    p.add_argument("--think-budget", type=int, default=8192)
     p.add_argument("--deadline", type=float, default=0, help="seconds for this process; thinking is skipped for a shop once the run is behind a pro-rata pace")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--engine", type=json.loads, default={}, help='extra vLLM engine kwargs as JSON, e.g. {"kv_cache_dtype": "fp8"}')
@@ -382,7 +404,7 @@ def main():
         loaded = {}
         for b in shops:
             try:
-                db, meta = load_business(a.data, b)
+                db, meta = load_business(a.data, b, canon=a.canon_names)
                 db.execute("SET enable_external_access = false")  # model SQL cannot read files or the network
                 db.execute("SET memory_limit = '6GB'")  # a runaway model join fails (-> repair) instead of exhausting host RAM
                 loaded[b] = db, meta
@@ -457,6 +479,16 @@ def main():
         elif b in vtexts:
             sql, nv = llmviews.pick(db, vchecked[b])
             verr = [e for fp, e in vchecked[b] if fp is None]
+            if not sql or nv * 4 < a.k:  # too few drafts pass the catalog test: the most common one that only fails that test
+                soft, sn = llmviews.pick_soft(db, vtexts[b])
+                if sn > nv:
+                    sql, nv = soft, sn
+                elif sql:
+                    llmviews.build(db, sql)
+            if sql and (spread := llmviews.unit_spread(db, sql)[0]) and spread > 2:  # qty is still not in one base unit
+                sql = llmviews.qty_by_price(sql)
+                llmviews.build(db, sql)
+                print(f"[views] {b}: price per qty differs {spread:.1f} times across units, factors read from the prices", flush=True)
         if b in vtexts:
             if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess; better no view than a wrong one
                 view = llmviews.describe(db, sql, nv, a.k)
@@ -480,6 +512,13 @@ def main():
             q["_hits"] = entity_hits(db, meta, q["question"])
             q["_periods"] = period_hints(q["question"], q["as_of_date"], db)
             q["_oor"] = outside(q["_periods"], data_span(meta))
+        if a.reader:  # greedy, base weights: the adapter was trained to write SQL, not to read rules
+            rrows, numbered = roles.number_lines(rulebook)
+            routs = llm.chat([roles.reader_chat(numbered, meta["readme"], q["question"]) for q in todo], SamplingParams(n=1, temperature=0, max_tokens=64), **kw)
+            for q, o in zip(todo, routs):
+                q["_picks"] = roles.parse_lines(o.outputs[0].text, len(rrows))
+                q["_rules"] = roles.rule_block(rrows, q["_picks"])
+            print(f"[reader] {b}: {sum(bool(q['_picks']) for q in todo)}/{len(todo)} questions got rules, {sum(len(q['_picks']) for q in todo) / max(1, len(todo)):.1f} lines each", flush=True)
         if a.agent:  # UNDERSTAND: a greedy reading per question, re-asked with its problems (unknown period kind, bad fields,
             # no JSON) up to --repairs times; GROUND: code looks its values up and turns its periods into rulebook windows.
             # The windows replace the regex period hints, so no time phrase needs a pattern written for it.
@@ -606,14 +645,39 @@ def main():
             for (i, j), (t, new) in revised.items():
                 texts[i][j], preds[i][j] = t, new
             print(f"[observe] {b}: {len(observed)} samples, {len(revised)} revised", flush=True)
+        pools = [debt_pool(ts, 2 * half) if a.debt_route else list(range(len(ts))) for ts in texts]
+        reviews = {}
+        if a.reviewer:  # greedy thinking on base weights, only where the voting samples disagree
+            items = {}
+            for i, q in enumerate(todo):
+                if texts[i] and not q["_oor"]:
+                    c = roles.candidates(q["question"], [(texts[i][j], preds[i][j]) for j in pools[i]], answer_key, parse, lambda ps: vote(ps, len(ps))[0], a.review_below)
+                    if c:
+                        items[i] = c
+            rsys = roles.REVIEW_SYSTEM + "\n\nRULEBOOK:\n" + rulebook
+            routs = llm.chat([roles.review_chat(rsys, chats[i][0][1]["content"], c) for i, c in items.items()], SamplingParams(n=1, temperature=0, max_tokens=a.think_budget + 256, seed=a.seed),
+                             chat_template_kwargs={"enable_thinking": True}, use_tqdm=False) if items else []
+            for (i, c), o in zip(items.items(), routs):
+                reviews[i] = {"choice": roles.parse_choice(o.outputs[0].text, c), "candidates": c, "reply": o.outputs[0].text[-1500:]}
+            print(f"[reviewer] {b}: {len(items)} reviewed, {Counter(str(v['choice']) for v in reviews.values()).most_common()}", flush=True)
         per_q = (time.time() - tb) / max(1, len(todo))  # batched generation: shop wall time shared equally (view batch excluded)
         for qi, (q, ts, ps, es, cs) in enumerate(zip(todo, texts, preds, errs, chats)):
-            ans, conf = vote(ps, len(ps))
+            voters = [ps[j] for j in pools[qi]]
+            ans, conf = vote(voters, len(voters))
             r = ({"type": "unanswerable", "reason": "period outside the shop's data dates"} if q["_oor"]
                  else ans if decide(ans, conf, a.threshold) else {"type": "abstain"})
+            if a.answer_unanswerable and not q["_oor"] and ans.get("type") == "unanswerable" and conf >= a.threshold:
+                r = ans
+            if reviews.get(qi, {}).get("choice"):  # a pick still passes the 0/empty and unanswerable rules; NONE abstains
+                pick = next((c["pred"] for c in reviews[qi]["candidates"] if c["label"] == reviews[qi]["choice"]), None)
+                r = pick if pick and decide(pick, 1.0, a.threshold) else {"type": "abstain"}
             results[q["id"]] = r
             rec = {"id": q["id"], "business_id": b, "question": q["question"], "final": r, "vote": ans, "conf": conf,
                    "elapsed_seconds": round(per_q, 2), "samples": [dict({"text": t, "pred": pr, "error": e}, **({"observed": observed[qi, j]} if (qi, j) in observed else {})) for j, (t, pr, e) in enumerate(zip(ts, ps, es))]}
+            if a.reader:
+                rec["picks"] = q["_picks"]
+            if qi in reviews:
+                rec["review"] = reviews[qi]
             if a.agent:
                 rec.update(plan=q.get("_plan"), facts=q.get("_facts"))
             if a.save_prompts:  # the system message is SYSTEM / SYSTEM_ALT + rulebook (samples 0..K/2-1 / the rest), the user message is shared

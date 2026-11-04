@@ -229,7 +229,69 @@ def profile(db, n, source):
     return {"name": n, "source": source, "rows": db.execute(f"SELECT count(*) FROM {quote(n)}").fetchone()[0], "columns": prof}
 
 
-def load_business(root, business):
+def spelling_key(v):
+    """A name without case, accents or extra spaces."""
+    s = unicodedata.normalize("NFD", str(v).replace("đ", "d").replace("Đ", "D"))
+    return " ".join("".join(c for c in s if unicodedata.category(c) != "Mn").lower().split())
+
+
+def spelling_map(counts):
+    """{value: count} -> {value: spelling to use}, for names that differ only in the way they are written (rulebook: such
+    names are one customer, one item). Forms with different accents stay apart (Bò, Bơ); a form without accents joins only
+    when one accented form shares its key, since otherwise it could be either."""
+    groups = defaultdict(list)
+    for v, n in counts.items():
+        k = spelling_key(v)
+        if k and len(k) <= 80 and any(c.isalpha() for c in k):
+            groups[k].append((v, n))
+    out = {}
+    for k, vs in groups.items():
+        if len(vs) < 2:
+            continue
+        forms = defaultdict(list)
+        for v, n in vs:
+            forms[" ".join(unicodedata.normalize("NFC", str(v)).lower().split())].append((v, n))
+        accented = [f for f in forms if f != k]
+        best = lambda m: max(m, key=lambda x: (not x[0].isupper(), x[1]))[0]
+        if len(accented) == 1:
+            forms = {accented[0]: vs}
+        elif accented:
+            forms.pop(k, None)
+        for m in forms.values():
+            use = best(m)
+            out.update({v: use for v, _ in m if v != use})
+    return out
+
+
+def canon_spellings(db, tables):
+    """Writes every name of a shop one way, across all its tables, so an item or a customer is one value in the raw tables,
+    the catalog joins and the views alike. Returns the number of cells changed."""
+    cols, counts = [], defaultdict(int)
+    for t in tables:
+        if t == "calendar":
+            continue
+        for col, typ, *_ in db.execute(f"DESCRIBE {quote(t)}").fetchall():
+            if typ == "VARCHAR" and not col.startswith("_"):
+                cols.append((t, col))
+                for v, n in db.execute(f"SELECT {quote(col)}, count(*) FROM {quote(t)} WHERE {quote(col)} IS NOT NULL GROUP BY 1").fetchall():
+                    counts[v] += n
+    mapping = spelling_map(counts)
+    if not mapping:
+        return 0
+    db.register("_m", pd.DataFrame({"v": list(mapping), "c": list(mapping.values())}))
+    db.execute("CREATE TEMP TABLE _spell AS SELECT * FROM _m")
+    db.unregister("_m")
+    changed = 0
+    for t, col in cols:
+        n = db.execute(f"SELECT count(*) FROM {quote(t)} x JOIN _spell m ON x.{quote(col)} = m.v").fetchone()[0]
+        if n:
+            db.execute(f"UPDATE {quote(t)} SET {quote(col)} = m.c FROM _spell m WHERE {quote(t)}.{quote(col)} = m.v")
+            changed += n
+    db.execute("DROP TABLE _spell")
+    return changed
+
+
+def load_business(root, business, canon=False):
     root = Path(root)
     folder = root / "data" / business
     if not folder.is_dir():
@@ -259,6 +321,8 @@ def load_business(root, business):
             tables[name] = f.name + (f"#{sheet}" if sheet else "")
     if not tables:
         raise ValueError(f"No usable tables: {folder}")
+    if canon:
+        canon_spellings(db, list(tables))
     if (root / "calendar.csv").exists():
         db.execute("CREATE TABLE calendar AS SELECT * FROM read_csv_auto(?, header=true)", [str(root / "calendar.csv")])
         tables["calendar"] = "calendar.csv"
