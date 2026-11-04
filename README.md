@@ -43,6 +43,8 @@ docker run --rm --gpus all --network none -v /duong/dan/split:/data:ro -v "$PWD/
 
 Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng shop và ghi `/result/submission.jsonl`. Trước khi build phải làm xong bước 1 và 3.
 
+Ảnh dựng được, nặng khoảng 68,5 GB, nên cần còn trống khoảng 100 GB đĩa khi build. Code nạp được và container thấy GPU, nhưng ảnh chưa chạy trọn một lượt trên GPU. Mỗi lệnh `docker` có thể cần `sudo`.
+
 ## Trọng số
 
 | Thành phần | Nguồn | Dung lượng |
