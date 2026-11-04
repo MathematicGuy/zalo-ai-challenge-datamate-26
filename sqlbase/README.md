@@ -12,6 +12,27 @@ No answers, business ids or question templates are hard-coded; inference never r
 4. **Samples** (`predict.py`, LoRA): 8 non-thinking SQL samples, half with similar examples from other shops (`fewshot.py`), executed on DuckDB with up to 2 repair turns. Questions under 0.75 agreement get 4 thinking samples.
 5. **Vote**: answer at a share of 0.5 or more, abstain on 0 or empty results. `--debt-route` votes among macro-using samples when most thinking samples use a macro. `--answer-unanswerable` answers when that is the majority. A period wholly outside the shop's dates is unanswerable.
 
+## Results (public leaderboard)
+
+| Setup | Score |
+| --- | ---: |
+| Qwen3-14B, SQL baseline | 0.359 |
+| Qwen3.5-9B | 0.383 |
+| Merged vote across sampling variants | 0.394 |
+| LoRA v1 | 0.428 |
+| LoRA v2, few-shot examples, debt macros | 0.491 |
+| `qty` in base units, saved SQL re-run on repaired views | 0.506 |
+| Unanswerable majorities | 0.516 |
+| Fresh samples, one spelling per name, factors from prices, views on the two shops that had none | about 0.60 |
+
+The last step changed 151 answers and removed about 41 wrong ones. The 632-question holdout rose only about 0.02 on the same work, because its six shops rarely show these data problems, so use it to catch breakage and judge real changes on the leaderboard.
+
+## Known gaps
+
+- `dev_014`: the debt layer fails on all 8 drafts, so debt and instalment questions go to raw tables.
+- About 40% of samples still read raw tables even when views are offered.
+- The Docker image builds and loads, but has not finished a full run on GPU.
+
 ## Run
 
 ```bash
