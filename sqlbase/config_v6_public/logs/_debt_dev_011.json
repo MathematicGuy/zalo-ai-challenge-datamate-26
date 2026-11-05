@@ -1,5 +1,5 @@
 {
- "agree": 5,
+ "agree": 7,
  "k": 8,
  "used": false,
  "sqls": null,
@@ -7,10 +7,11 @@
   "none",
   "none",
   "none",
-  "None",
-  "None",
-  "None",
   "none",
+  "none",
+  "none",
+  "None",
   "none"
- ]
+ ],
+ "errors": []
 }

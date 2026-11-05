@@ -1,16 +1,17 @@
 {
- "agree": 2,
+ "agree": 0,
  "k": 8,
  "used": false,
  "sqls": null,
  "checked": [
   "None",
-  "none",
-  "none",
+  "None",
+  "None",
   "None",
   "None",
   "None",
   "None",
   "None"
- ]
+ ],
+ "errors": []
 }

@@ -13,7 +13,7 @@ for i in $(seq 0 $((NG - 1))); do
   CUDA_VISIBLE_DEVICES=$i timeout --signal=TERM --kill-after=15s "${TIMEOUT_SECONDS:-21000}s" \
     python3 predict.py --data "$DATA" --output "$OUT/shard$i" --shard "$i/$NG" \
     --model "${MODEL_DIR:-/models/Qwen3.5-9B}" --quant "${QUANT:-fp8}" --k 8 --think-k 4 --deadline "$(( ${TIMEOUT_SECONDS:-21000} - 900 ))" --gpu-mem "${GPU_MEM:-0.92}" \
-    --lora "${LORA_DIR:-/models/lora}" --lora-thinking --fewshot fewshot_bank24.jsonl --debt-views --debt-route --canon-names --answer-unanswerable \
+    --lora "${LORA_DIR:-/models/lora}" --lora-thinking --fewshot fewshot_bank24m.jsonl --debt-views --debt-route --canon-names --notes --max-tokens 2048 --answer-unanswerable \
     --engine "$ENGINE" "$@" > "$OUT/logs/_shard$i.txt" 2>&1 &
 done
 wait

@@ -27,7 +27,7 @@ hf download Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a 
 #    data/public_test/{questions.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
 #    data/train/{questions.jsonl,answers.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
 
-# 5. Chạy public, khoảng 2 giờ trên một GPU 24 GB
+# 5. Chạy public, khoảng 2,5 giờ trên một GPU 24 GB
 bash sqlbase/run_public.sh runs/my_run
 # File để nộp: runs/my_run/submission.jsonl
 ```
@@ -51,8 +51,8 @@ Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng s
 |---|---|---|
 | Qwen3.5-9B | Hugging Face, lệnh ở bước 3; không đưa vào repo vì quá lớn cho Git LFS | Khoảng 19 GB |
 | LoRA v2 | `runs/lora/sql_rft_v2/adapter`, qua Git LFS | 185 MB |
-| Bộ ví dụ few-shot | `sqlbase/fewshot_bank24.jsonl` | Trong repo |
-| View và lớp công nợ đã lưu của public | `sqlbase/config_v4_public` | Trong repo |
+| Bộ ví dụ few-shot | `sqlbase/fewshot_bank24m.jsonl` | Trong repo |
+| View và lớp công nợ đã lưu của public | `sqlbase/config_v6_public` | Trong repo |
 | LoRA v3 | Đang train; khi có sẽ nằm ở `runs/lora/sql_rft_v3/adapter`, dùng bằng `LORA_DIR=runs/lora/sql_rft_v3/adapter` | |
 
 ## Điểm public
@@ -62,7 +62,8 @@ Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng s
 | LoRA v2, few-shot, macro công nợ (`runs/analysis/run_v2_public.sh`) | 0.491 |
 | Thêm `qty` theo đơn vị cơ bản | 0.506 |
 | Thêm trả lời `unanswerable` theo đa số | 0.516 |
-| Sinh mẫu mới, thêm chuẩn hóa tên và hệ số từ giá (`sqlbase/run_public.sh`) | 0.60 |
+| Sinh mẫu mới, thêm chuẩn hóa tên và hệ số từ giá | 0.60 |
+| Thêm ghi chú trước SQL và ví dụ macro công nợ (`sqlbase/run_public.sh`) | 0.63 |
 
 Mỗi lần chạy sinh mẫu mới nên điểm có thể lệch nhẹ.
 
