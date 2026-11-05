@@ -8,8 +8,8 @@ No answers, business ids or question templates are hard-coded; inference never r
 
 1. **Load** (`ingest.py`): every sheet and table becomes a typed DuckDB table with its original column names. With `--canon-names`, names that differ only in case, spaces or missing accents are written one way across the shop's tables, so an item or a customer is one value in the raw tables, the catalog joins and the views.
 2. **Views per shop** (`llmviews.py`, base weights, thinking): 8 drafts of one SELECT mapping the shop to `v_sales`, `v_orders` and their `_all` versions, data tests, one repair turn, most common fingerprint. If too few drafts pass the catalog test, the most common draft that only fails that test is used. `qty` is in base units; if price per unit still differs across units of an item (`unit_spread` above 2), the factors are read from the prices (`qty_by_price`).
-3. **Debt layer per shop** (`debtview.py`): the same recipe gives the macros `debt_at`, `debt_new` and `debt_repaid`.
-4. **Samples** (`predict.py`, LoRA): 8 non-thinking SQL samples, half with similar examples from other shops (`fewshot.py`), executed on DuckDB with up to 2 repair turns. Questions under 0.75 agreement get 4 thinking samples.
+3. **Debt layer per shop** (`debtview.py`): the same recipe (thinking drafts, data tests, two repair turns) gives the macros `debt_at`, `debt_new` and `debt_repaid`.
+4. **Samples** (`predict.py`, LoRA): 8 non-thinking SQL samples, half with similar examples from other shops (`fewshot.py`, including examples that call the debt macros), each forced to start with short notes (`--notes`), executed on DuckDB with up to 2 repair turns. Questions under 0.75 agreement get 4 thinking samples.
 5. **Vote**: answer at a share of 0.5 or more, abstain on 0 or empty results. `--debt-route` votes among macro-using samples when most thinking samples use a macro. `--answer-unanswerable` answers when that is the majority. A period wholly outside the shop's dates is unanswerable.
 
 ## Results (public leaderboard)
@@ -24,19 +24,23 @@ No answers, business ids or question templates are hard-coded; inference never r
 | `qty` in base units, saved SQL re-run on repaired views | 0.506 |
 | Unanswerable majorities | 0.516 |
 | Fresh samples, one spelling per name, factors from prices, views on the two shops that had none | about 0.60 |
+| Notes before the SQL, few-shot examples that call the debt macros | about 0.63 |
 
-The last step changed 151 answers and removed about 41 wrong ones. The 632-question holdout rose only about 0.02 on the same work, because its six shops rarely show these data problems, so use it to catch breakage and judge real changes on the leaderboard.
+The 0.60 step changed 151 answers and removed about 41 wrong ones, while the 632-question holdout rose only about 0.02, because its six shops rarely show these data problems. Use the holdout to catch breakage and judge real changes on the leaderboard.
+
+Forcing notes on plain samples raised right samples on 156 hard holdout questions from 24.9% to 44.2%, and votes right/wrong from 42/20 to 77/7 (`runs/analysis/notes_test.py`). The macro examples raised right samples on 50 debt questions from 16.2% to 29.2%. A learned answer selector on vote features (`runs/analysis/selector.py`) only tied the vote, so it is not used.
 
 ## Known gaps
 
-- `dev_014`: the debt layer fails on all 8 drafts, so debt and instalment questions go to raw tables.
+- `dev_008` and `dev_014`: the debt layer fails on all 8 drafts, so their debt questions go to raw tables.
+- `--hide-raw` (raw sales tables left out of the schema) is under test and off by default.
 - About 40% of samples still read raw tables even when views are offered.
 - The Docker image builds and loads, but has not finished a full run on GPU.
 
 ## Run
 
 ```bash
-bash sqlbase/run_public.sh runs/my_run            # public test, saved views, about 2 h on one 24 GB GPU
+bash sqlbase/run_public.sh runs/my_run            # the 0.63 setup, saved views, about 2.5 h on one 24 GB GPU
 bash runs/analysis/run_v2_public.sh runs/old_run  # the older 0.491 setup
 python3 train/check_submission.py runs/my_run/submission.jsonl
 ```

@@ -81,6 +81,9 @@ def date_anchors(as_of):
     ])
 
 
+NOTES = "Notes:\n-"  # the start of a plain sample with --notes
+
+
 def period_hints(question, as_of, db=None):
     """Explicit windows for the periods a question names (rulebook: month/quarter without year, Tết by lunar calendar)."""
     d, t, out = date.fromisoformat(as_of), norm(question), []
@@ -416,6 +419,8 @@ def main():
     p.add_argument("--gpu-mem", type=float, default=0.9)
     p.add_argument("--quant")
     p.add_argument("--context", type=int, default=32768)
+    p.add_argument("--hide-raw", action="store_true", help="leave the raw sales tables the views map out of the schema, naming only their columns")
+    p.add_argument("--notes", action="store_true", help="plain samples must start with short notes before the SQL: on hard holdout questions, right samples 24.9%% -> 44.2%%, votes right/wrong 42/20 -> 77/7")
     p.add_argument("--canon-names", action="store_true", help="write every name of a shop one way when loading it (ingest.canon_spellings)")
     p.add_argument("--views", choices=["llm", "none"], default="llm", help="canonical sales tables written by the LLM per shop (llmviews.py), or none")
     p.add_argument("--view-think", type=int, default=6144, help="thinking-mode token budget for the per-shop view stage (0 = no thinking)")
@@ -522,19 +527,10 @@ def main():
             dfixed = {b: json.loads(f.read_text(encoding="utf-8")) for b in loaded if (f := a.views_from / "logs" / f"_debt_{b}.json").exists()}
         ddraft = [b for b in loaded if b not in dfixed]
         if ddraft:
-            dchats = {b: [{"role": "system", "content": debtview.DEBT_SYSTEM + "\n\nRULEBOOK:\n" + rulebook},
-                          {"role": "user", "content": "README:\n" + loaded[b][1]["readme"] + "\n\nSCHEMA:\n" + schema_text(loaded[b][1])}] for b in ddraft}
-            douts = llm.chat(list(dchats.values()), SamplingParams(n=a.k, temperature=a.temperature, top_p=0.95, top_k=20, max_tokens=2048, seed=a.seed), **kw)
-            dtexts = {b: [x.text for x in o.outputs] for b, o in zip(ddraft, douts)}
-            dchecked = {b: debtview.check(loaded[b][0], ts) for b, ts in dtexts.items()}
-            dfail = [(b, j) for b, c in dchecked.items() for j, (fp, _) in enumerate(c) if fp is None]
-            if dfail:
-                rch = [dchats[b] + [{"role": "assistant", "content": dtexts[b][j].strip()},
-                                    {"role": "user", "content": f"ERROR: {dchecked[b][j][1]}\nFix it. Answer with the two ```sql``` blocks only, or NONE."}] for b, j in dfail]
-                for (b, j), o in zip(dfail, llm.chat(rch, SamplingParams(n=1, temperature=0, max_tokens=2048), **kw)):
-                    dtexts[b][j] += "\n#REPAIR\n" + o.outputs[0].text
-                    dchecked[b][j] = debtview.check(loaded[b][0], [o.outputs[0].text])[0]
-            print(f"debt drafts in {time.time() - t0:.0f}s ({len(dfail)} repaired)", flush=True)
+            dres = debtview.draft(lambda cs, sp, th: llm.chat(cs, sp, chat_template_kwargs={"enable_thinking": th}, use_tqdm=False), SamplingParams, {b: loaded[b] for b in ddraft},
+                                  rulebook, schema_text, k=a.k, think=a.view_think, temperature=0.6, seed=a.seed)
+            dchecked = {b: r[1] for b, r in dres.items()}
+            print(f"debt drafts in {time.time() - t0:.0f}s", flush=True)
     results, n_repair = {}, 0
     tr = (a.output / "trace.jsonl").open("w", encoding="utf-8")
     for b, (db, meta) in loaded.items():  # one shop at a time: answer all its questions, write results (checkpoint), close
@@ -575,10 +571,14 @@ def main():
             (a.output / "logs" / f"_debt_{b}.json").write_text(json.dumps({"agree": dn, "k": dk, "used": bool(debt), "sqls": sqls, "checked": dfps,
                                                                          "errors": [e for fp, e in dchecked.get(b, []) if fp is None]}, ensure_ascii=False, indent=1), encoding="utf-8")
             print(f"[debts] {b}: {dn}/{dk} agree, used={bool(debt)}", flush=True)
-        ctx = "README:\n" + meta["readme"] + "\n\nSCHEMA:\n" + schema_text(meta) + ("\n\nCANONICAL VIEWS:\n" + view if view else "") + ("\n\n" + debt if debt else "")
+        shown, raw_note = meta, ""
+        if a.hide_raw and view:  # the views become the interface; the mapping SQL would only point back at the raw tables
+            shown, raw_note = llmviews.hide_raw(db, meta, sql)
+            view = view.split("\nBuilt from the raw tables")[0]
+        ctx = "README:\n" + meta["readme"] + "\n\nSCHEMA:\n" + schema_text(shown) + raw_note + ("\n\nCANONICAL VIEWS:\n" + view if view else "") + ("\n\n" + debt if debt else "")
         todo = by_shop[b]
         for q in todo:
-            q["_hits"] = entity_hits(db, meta, q["question"])
+            q["_hits"] = entity_hits(db, shown, q["question"])
             q["_periods"] = period_hints(q["question"], q["as_of_date"], db) + grain_hints(q["question"])
             q["_oor"] = outside(q["_periods"], data_span(meta))
         # examples read the canonical views, so a shop without them gets none
@@ -588,9 +588,12 @@ def main():
                 for cs in chats]
         tg = time.time()
         sp = SamplingParams(n=half, temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens, seed=a.seed)
-        outs = llm.chat([c for cs, f in zip(chats, fits) if f for c in cs], sp, **lkw)
+        batch = [c for cs, f in zip(chats, fits) if f for c in cs]
+        if a.notes:
+            batch = [c + [{"role": "assistant", "content": NOTES}] for c in batch]
+        outs = llm.chat(batch, sp, **(dict(lkw, add_generation_prompt=False, continue_final_message=True) if a.notes else lkw))
         it = iter(outs)
-        texts = [[o.text for _ in systems for o in next(it).outputs] if f else [] for f in fits]
+        texts = [[(NOTES if a.notes else "") + o.text for _ in systems for o in next(it).outputs] if f else [] for f in fits]
 
         # Execute; failed samples get greedy repair turns with the error message (fix below).
         preds = [[None] * len(t) for t in texts]

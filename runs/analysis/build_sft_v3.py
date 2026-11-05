@@ -51,7 +51,10 @@ for run, plain_k in [(x, 8) for x in a.runs] + [(x, 2) for x in a.teacher]:
                 continue
             if j < plain_k:
                 n += 1
-                reply = s["text"].split("\n#REPAIR\n")[-1].strip()
+                parts = s["text"].split("\n#REPAIR\n")
+                reply = parts[-1].strip()
+                if len(parts) > 1 and parts[0].startswith("Notes:") and "Notes:" not in reply:  # a repair turn fixes the SQL; keep the notes of the first turn
+                    reply = parts[0].split("TYPE:")[0].strip() + "\n" + reply
                 key = fewshot.skeleton(reply.split("```sql")[-1])
                 if key not in seen:
                     seen.add(key); plain.append(reply)

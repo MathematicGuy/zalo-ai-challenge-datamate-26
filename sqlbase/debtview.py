@@ -115,6 +115,30 @@ def check(db, texts):
     return out
 
 
+def draft(chat, sampling, shops, rulebook, schema_text, k=8, think=6144, temperature=0.6, seed=0, repairs=2):
+    """Thinking drafts per shop, all shops in one batch, then greedy repair turns with the failed test, as for the views: without thinking the model guessed
+    column names and a single repair turn did not recover them. chat(conversations, params, enable_thinking) -> outputs; sampling is SamplingParams; shops is {shop: (db, meta)}. Returns {shop: (texts, checked)}."""
+    chats = {b: [{"role": "system", "content": DEBT_SYSTEM + "\n\nRULEBOOK:\n" + rulebook},
+                 {"role": "user", "content": "README:\n" + m["readme"] + "\n\nSCHEMA:\n" + schema_text(m)}] for b, (_, m) in shops.items()}
+    outs = chat(list(chats.values()), sampling(n=k, temperature=temperature, top_p=0.95, top_k=20, max_tokens=think + 2048, seed=seed), bool(think))
+    texts = {b: [x.text for x in o.outputs] for b, o in zip(chats, outs)}
+    checked = {b: check(shops[b][0], ts) for b, ts in texts.items()}
+    conv = {}
+    for _ in range(repairs):
+        fail = [(b, j) for b, c in checked.items() for j, (fp, _) in enumerate(c) if fp is None]
+        if not fail:
+            break
+        for b, j in fail:
+            conv.setdefault((b, j), chats[b] + [{"role": "assistant", "content": texts[b][j].split("</think>")[-1].strip() or "(no answer)"}])
+            conv[b, j].append({"role": "user", "content": f"ERROR: {checked[b][j][1]}\nFix it, using only tables and columns listed in SCHEMA for the table you read. Answer with the two ```sql``` blocks only, or NONE."})
+        for (b, j), o in zip(fail, chat([conv[x] for x in fail], sampling(n=1, temperature=0, max_tokens=4096), False)):
+            reply = o.outputs[0].text
+            conv[b, j].append({"role": "assistant", "content": reply})
+            texts[b][j] += "\n#REPAIR\n" + reply
+            checked[b][j] = check(shops[b][0], [reply])[0]
+    return {b: (texts[b], checked[b]) for b in chats}
+
+
 def pick(checked):
     """(two SELECTs of the most common fingerprint, its count); (None, count) when all working drafts say the shop has no debts.
     A NONE vote does not outvote a layer that passed the data tests: on holdout biz_106 / biz_123, 5/8 and 3/8 drafts said

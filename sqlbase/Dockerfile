@@ -6,7 +6,7 @@ COPY sqlbase/requirements.txt /app/
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
 COPY sqlbase/models/Qwen3.5-9B /models/Qwen3.5-9B
 COPY runs/lora/sql_rft_v2/adapter /models/lora
-COPY sqlbase/*.py sqlbase/*.json sqlbase/predict.sh sqlbase/fewshot_bank24.jsonl /app/
+COPY sqlbase/*.py sqlbase/*.json sqlbase/predict.sh sqlbase/fewshot_bank24m.jsonl /app/
 RUN chmod +x /app/predict.sh
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 VLLM_NO_USAGE_STATS=1 TOKENIZERS_PARALLELISM=false PYTHONHASHSEED=0
 ENTRYPOINT ["/app/predict.sh"]

@@ -300,6 +300,19 @@ def pick(db, checked):
     return best, len(sqls)
 
 
+def hide_raw(db, meta, sql):
+    """(meta without the raw sales tables the views map, one line naming their columns): samples that read those tables skip every status, unit and name rule the views apply.
+    Lookup tables stay; a table the mapping reads counts as raw sales when it holds at least a fifth as many rows as the sales lines."""
+    lines = db.execute("SELECT count(*) FROM v_sales_all").fetchone()[0]
+    used = {x.lower() for x in re.findall(r'(?i)\b(?:from|join)\s+"?(\w+)"?', sql)}
+    raw = [t for t in meta["tables"] if t["name"].lower() in used and t["name"] != "calendar" and not t["name"].startswith("v_") and t["rows"] >= 0.2 * lines]
+    if not raw:
+        return meta, ""
+    names = {t["name"] for t in raw}
+    cols = "; ".join(f'"{t["name"]}"(' + ", ".join(f'"{c[0]}"' for c in t["columns"] if c[0] not in ("_sheet", "_source")) + ")" for t in raw)
+    return dict(meta, tables=[t for t in meta["tables"] if t["name"] not in names]), ("\n\nRAW SALES TABLES, only for a column the canonical views do not have (the views already apply the rulebook's status, unit and name rules): " + cols)
+
+
 def describe(db, sql, n, k):
     nv, no = db.execute("SELECT (SELECT count(*) FROM v_sales), (SELECT count(*) FROM v_orders)").fetchone()
     cols = ("order_ts", "product_code", "product_group", "product_name", "qty", "unit", "customer_key", "customer_name", "staff", "channel", "payment")

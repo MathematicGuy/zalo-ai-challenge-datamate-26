@@ -12,7 +12,7 @@ mkdir -p "$OUT"
 for i in $(seq 0 $((NG - 1))); do
   CUDA_VISIBLE_DEVICES=$i "$PY" "${PREDICT:-sqlbase/predict.py}" --data data/train --ids splits/holdout600.txt --output "$OUT/shard$i" --shard "$i/$NG" \
     --model sqlbase/models/Qwen3.5-9B --quant fp8 --k 8 --think-k 4 --gpu-mem "${GPU_MEM:-0.92}" --engine "$ENGINE" \
-    --lora "${LORA_DIR:-runs/lora/sql_rft_v2/adapter}" --lora-thinking --fewshot sqlbase/fewshot_bank24.jsonl \
-    --debt-views --debt-route --canon-names --answer-unanswerable "$@" > "$OUT/shard$i.txt" 2>&1 &
+    --lora "${LORA_DIR:-runs/lora/sql_rft_v2/adapter}" --lora-thinking --fewshot sqlbase/fewshot_bank24m.jsonl \
+    --debt-views --debt-route --canon-names --notes --max-tokens 2048 --answer-unanswerable "$@" > "$OUT/shard$i.txt" 2>&1 &
 done
 wait
