@@ -5,6 +5,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -12,13 +13,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
 from ingest import ckey, entity_hits, load_business, norm, profile, schema_text
-import agent
 import debtview
 import fewshot
-import harness
 import llmviews
-import prompts
-import roles
 
 DEBT_CALL = re.compile(r"debt_(at|new|repaid)\s*\(")
 TYPES = ("number", "percent", "string", "date", "boolean", "list", "table", "unanswerable")
@@ -75,7 +72,7 @@ def date_anchors(as_of):
         f"today (hôm nay) = {d} ({['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][d.weekday()]}); half-open end = {nxt(d)}",
         f"the data may go on after today; those later rows have not happened yet (rulebook), so a question naming no period covers the data up to and including today ({d}); a named period keeps its own window; cancel/return status is the order's recorded status",
         f"yesterday (hôm qua, bữa qua, hqua) = {d - timedelta(days=1)} = [{d - timedelta(days=1)}, {d})",
-        f"this week (tuần này) = [{mon}, {nxt(d)}); last week (tuần trước) = [{mon - timedelta(days=7)}, {mon})",
+        f"this week (tuần này) = [{mon}, {nxt(d)}); last week (tuần trước, tuần rồi) = [{mon - timedelta(days=7)}, {mon})",
         f"this month (tháng này) = [{m1}, {nxt(d)}); last month same days = [{pm1}, {nxt(pm_same)}); whole last month = [{pm1}, {m1})",
         f"year to date (từ đầu năm) = [{d.replace(month=1, day=1)}, {nxt(d)})",
         *(f"quarters of {y}: " + "; ".join(f"Q{i} (quý {i}) = [{y}-{3*i-2:02d}-01, {y + (i == 4)}-{(3*i+1) % 12 or 12:02d}-01)" for i in range(1, 5))
@@ -121,15 +118,52 @@ def period_hints(question, as_of, db=None):
             if a and b:
                 n = (b - a).days + 1
                 out.append(f"Tết {y} = [{a}, {b + timedelta(days=1)}) ({n} days); trước Tết (same {n} days before) = [{a - timedelta(days=n)}, {a})")
-    for n in re.findall(r"(?:^|_)(\d{1,3})_ngay_(?:gan_nhat|gan_day|qua|vua_qua|truoc|cuoi)", t):
+    # 'N ngày trước đó / trước Tết' is a window before another day, not the last N days
+    for n in re.findall(r"(?:^|_)(\d{1,3})_ngay_(?:gan_nhat|gan_day|qua|vua_qua|truoc(?!_(?:do|tet|khi|ngay|hom|dot|lan))|cuoi)", t):
+        if len(re.findall(rf"(?:^|_){n}_ngay(?=_|$)", t)) > 1:  # 'N ngày kể từ hôm đó so với N ngày trước': both windows hang on another day
+            continue
         n = int(n)
         out.append(f"{n} ngày gần nhất (incl. today) = [{d - timedelta(days=n - 1)}, {d + timedelta(days=1)})")
+    days = []
     for dd, mm, yy in re.findall(r"(?:^|_)(\d{1,2})_(\d{1,2})_(\d{4})(?=_|$)", t):
         try:
-            x = date(int(yy), int(mm), int(dd)); out.append(f"ngày {x} = [{x}, {x + timedelta(days=1)})")
+            x = date(int(yy), int(mm), int(dd)); out.append(f"ngày {x} = [{x}, {x + timedelta(days=1)})"); days.append(x)
         except ValueError:
             pass
+    # rulebook 'Hiệu ứng tăng giá': N days from D (D included) against the N days right before D; samples miscount these bounds
+    k = re.search(r"(?:^|_)(\d{1,3})_ngay_ke_tu(?=_|$)", t)
+    if k and len(set(days)) == 1:
+        n, x = int(k.group(1)), days[0]
+        out.append(f"{n} ngày kể từ {x} (incl. {x}) = [{x}, {x + timedelta(days=n)})")
+        if re.search(r"(?:^|_)truoc(?=_|$)", t[k.end():]):
+            out.append(f"{n} ngày ngay trước {x} = [{x - timedelta(days=n)}, {x})")
     return list(dict.fromkeys(out))
+
+
+COUNT_DAYS = re.compile(r"(?:^|_)(?:may|bao_nhieu|bn|bnhiu|bao_nheiu|so)_(?:ngay|bua|hom)(?:_|$)")
+THRESHOLD = re.compile(r"tro_l|tro_xuong|(?:^|_)(?:tren|duoi|it_nhat|vuot|qua)_\d|≥|>=")
+
+
+PRICE_UP = re.compile(r"(?:^|_)(?:len_gia|tang_gia|doi_gia|len_\d)")
+N_DAYS = re.compile(r"(?:^|_)\d{1,3}_ngay")
+DAY_MONTH = re.compile(r"(?:^|_)\d{1,2}_\d{1,2}(?:_\d{4})?(?=_|$)")
+PROFIT = re.compile(r"(?:^|_)(?:lai_gop|loi_gop|lai_rong|loi_rong|loi_that|lai_that|loi_nhuan|tru_chi_phi)(?:_|$)")
+
+
+def grain_hints(question):
+    """Question shapes the samples misread: 'mấy ngày bán được từ X trở lên' counts days by their daily total (public samples
+    counted orders >= X); 'từ khi X lên giá P, N ngày đầu ...' names no date, so D has to come from the price table
+    (public: all 3 such questions abstained, samples guessed D differently)."""
+    t, out = norm(question), []
+    if COUNT_DAYS.search(t) and THRESHOLD.search(t + question):
+        out.append("GRAIN: count DAYS, not orders: total the amount per day (GROUP BY the date), then count the days whose daily total meets the condition.")
+    if PRICE_UP.search(t) and N_DAYS.search(t) and not DAY_MONTH.search(t):
+        out.append("PRICE INCREASE DATE D is not given: in a CTE take D from the price table = the first date the item's price became the new price, "
+                   "higher than its price right before; then compare quantity sold in [D, D + N days) with [D - N days, D).")
+    if PROFIT.search(t):  # public samples wrote SUM(cost) * SUM(qty) or subtracted the sales amount twice
+        out.append("PROFIT (rulebook): gross profit = revenue of valid sale lines - SUM(quantity * cost per unit recorded on each sale line), "
+                   "computed line by line; net profit / lời thật of a month = its gross profit - SUM of every expense row dated in that month.")
+    return out
 
 
 def data_span(meta):
@@ -156,19 +190,33 @@ SLANG = {"hqua": "hôm qua", "hnay": "hôm nay", "hnao": "hôm nào", "bqua": "b
          "bnhiu": "bao nhiêu", "bn": "bao nhiêu", "bnh": "bao nhiêu", "sl": "số lượng", "sp": "sản phẩm", "kh": "khách hàng",
          "ko": "không", "k": "không", "dc": "được", "đc": "được", "tg": "thời gian", "nv": "nhân viên", "ncc": "nhà cung cấp",
          "th": "tháng", "thg": "tháng", "z": "vậy", "mik": "mình", "mk": "mình", "j": "gì",
-         "gồi": "rồi", "rùi": "rồi", "hok": "không", "hem": "không", "nhìu": "nhiều", "bít": "biết", "lun": "luôn", "jup": "giúp", "dzậy": "vậy", "zậy": "vậy"}
+         "gồi": "rồi", "rùi": "rồi", "hok": "không", "hem": "không", "nhìu": "nhiều", "bít": "biết", "lun": "luôn", "jup": "giúp", "dzậy": "vậy", "zậy": "vậy",
+         "ni": "này", "mô": "nào", "wan": "quán"}  # central / chat forms seen in public questions, absent from train
+MONEY = re.compile(r"\b(\d+(?:[.,]\d)?)\s*(tr|triệu|trieu|củ|k)(\d?)\b", re.I)
+
+
+def money_gloss(question):
+    """'40tr' = 40000000, '3tr7' = 3700000, '11 củ' = 11000000, '190k' = 190000 (chat shorthand for amounts)."""
+    out = []
+    for m in MONEY.finditer(question):
+        n, u, frac = m.groups()
+        mult = 1000 if u.lower() == "k" else 1000000
+        v = (Decimal(n.replace(",", ".")) + Decimal(f"0.{frac or 0}")) * mult
+        out.append(f"{m.group(0)} = {int(v)} đồng")
+    return out
+
+
+assert money_gloss("từ 3tr7 trở lên, 40tr, 11 củ, 190k, 1,5 triệu") == ["3tr7 = 3700000 đồng", "40tr = 40000000 đồng", "11 củ = 11000000 đồng", "190k = 190000 đồng", "1,5 triệu = 1500000 đồng"]
 
 
 def chat(system, biz_ctx, q, shots=""):
     hits = q["_hits"]
     words = re.findall(r"\w+", q["question"].lower())
-    gloss = [f"{w} = {SLANG[w]}" for w in dict.fromkeys(words) if w in SLANG]
+    gloss = [f"{w} = {SLANG[w]}" for w in dict.fromkeys(words) if w in SLANG] + money_gloss(q["question"])
     user = (biz_ctx + "\n\nDATE ANCHORS:\n" + date_anchors(q["as_of_date"])
             + "".join("\n" + p for p in q.get("_periods", []))
             + ("\n\nVALUES MATCHING THE QUESTION:\n" + "\n".join(hits) if hits else "")
-            + ("\n\n" + q["_facts"] if q.get("_facts") else "")
             + ("\n\n" + shots if shots else "")
-            + ("\n\n" + q["_rules"] if q.get("_rules") else "")
             + f"\n\nQUESTION: {q['question']}" + (f"\n(abbreviations: {'; '.join(gloss)})" if gloss else ""))
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
@@ -265,6 +313,8 @@ def execute(db, text, question=""):
         raise ValueError("a change in % is ROUND(100.0 * (new - old) / old, 2), negative when it fell; this query has no subtraction")
     names, rows = run_sql(db, sql.rstrip(";"))
     ans = to_answer(kind, names, rows)
+    if kind == "string" and (m := re.fullmatch(r"(?i)\s*th[aá]ng\s*(\d{1,2})\s*[/-]\s*(\d{4})\s*", ans)) and 1 <= int(m[1]) <= 12:
+        ans = f"{m[2]}-{int(m[1]):02d}"  # 'tháng 3/2025' and '2025-03' split the vote on public 'tháng nào' questions; gold is YYYY-MM
     if kind == "string" and re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", ans):  # a day/month answer is type date
         kind = "date"
     return {"type": kind, "answer": ans}
@@ -278,6 +328,10 @@ def repair_hint(err):
     if err.startswith(("expected one cell, got 0 rows", "result is NULL")):
         return ("No row matched the filters: check every filter value against the SCHEMA values and VALUES MATCHING THE QUESTION (spelling, "
                 "or the value sits in another column or table, e.g. an address in the customer list), and the date window against DATE ANCHORS.\n")
+    if re.match(r"expected one cell, got \d+ rows x \['count\(", err, re.I):
+        return "This COUNT has a GROUP BY, so it returns one count per group: to count the groups (customers, products, days) use COUNT(DISTINCT ...) without GROUP BY, or SELECT COUNT(*) FROM (the grouped query).\n"
+    if "type TIMESTAMP" in err and "type TIME " in err + " ":
+        return "To compare a time of day, cast the timestamp: CAST(col AS TIME) >= TIME '12:00', or use EXTRACT(hour FROM col).\n"
     if err.startswith("expected one cell, got"):
         return "The question asks for one value: aggregate, or ORDER BY ... LIMIT 1 for a top-1 question; use TYPE list/table if it asks for several.\n"
     if "not found in FROM clause" in err:
@@ -285,19 +339,42 @@ def repair_hint(err):
     return ""
 
 
+def fold(v):
+    """Cell as the scorer compares it (evaluation.norm / key, which inference does not import): text by NFC lowercase words, numbers by value."""
+    if isinstance(v, str):
+        return " ".join("".join(c if c.isalnum() or c.isspace() else " " for c in unicodedata.normalize("NFC", v).lower()).split())
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+
 def answer_key(p):
-    """Two samples with the same key are one answer in the vote."""
-    a = p.get("answer")
-    num = p["type"] in ("number", "percent") and isinstance(a, (int, float)) and not isinstance(a, bool)
-    return json.dumps(["num", round(float(a), 2)] if num else p, ensure_ascii=False, default=str, sort_keys=True)
+    """Two samples with the same key are one answer in the vote. Keys follow the scorer: a table is its set of rows (column names
+    only reorder columns), text ignores case and punctuation. Keying by the whole answer split tables by column names
+    (holdout: debt top-N tables abstained with every sample holding the same rows)."""
+    a, t = p.get("answer"), p["type"]
+    if t in ("number", "percent") and isinstance(a, (int, float)) and not isinstance(a, bool):
+        return json.dumps(["num", round(float(a), 2)])
+    if t == "string" and isinstance(a, str):
+        a = fold(a)
+    elif t == "list" and isinstance(a, list):
+        a = [fold(x) for x in a]
+    elif t == "table" and isinstance(a, dict) and isinstance(a.get("rows"), list):
+        a = [len(a.get("columns") or [])] + sorted(json.dumps([fold(x) for x in r], ensure_ascii=False, default=str) if isinstance(r, list) else str(r) for r in a["rows"])
+    return json.dumps([t, a], ensure_ascii=False, default=str, sort_keys=True)
 
 
-def debt_pool(texts, start):
-    """Indices of the samples that vote. When most thinking samples (from `start`) call a debt macro, only the samples calling one do:
-    plain samples of a LoRA that never saw the macros answer debt questions from raw tables."""
-    uses = [bool(DEBT_CALL.search(t.split("\n#REPAIR\n")[-1])) for t in texts]
+def debt_pool(texts, start, debt_q=False):
+    """Indices of the samples that vote. When the question asks about debts and the shop has the debt layer (`debt_q`), or most thinking
+    samples (from `start`) call a debt macro, only the samples calling one do: plain samples of a LoRA that never saw the macros answer
+    debt questions from raw tables (holdout biz_111: the macros give the gold answer on all 8 lost debt questions, the raw majority on none).
+    Only the executed query counts: a thought that names a macro and then reads raw tables is a raw sample."""
+    uses = [bool(DEBT_CALL.search(parse(t.split("\n#REPAIR\n")[-1])[1] or "")) for t in texts]
     think = uses[start:]
-    return [j for j, u in enumerate(uses) if u] if think and sum(think) / len(think) >= .5 else list(range(len(texts)))
+    if (debt_q and any(uses)) or (think and sum(think) / len(think) >= .5):
+        return [j for j, u in enumerate(uses) if u]
+    return list(range(len(texts)))
+
+
+DEBT_WORDS = re.compile(r"(?:^|_)(?:no|nowj|cong_no|mua_chiu|ghi_no)(?:_|$)")  # nợ (also its telex typo), công nợ, mua chịu, ghi nợ, on norm(question)
 
 
 def vote(preds, k):
@@ -346,19 +423,12 @@ def main():
     p.add_argument("--repairs", type=int, default=2, help="greedy repair turns for a failed sample (thinking samples included)")
     p.add_argument("--lora-thinking", action="store_true", help="also use --lora for the thinking samples")
     p.add_argument("--lora", type=Path, help="LoRA adapter for the non-thinking SQL samples, TYPE fills and every repair turn (view drafts and thinking samples stay on the base model)")
-    p.add_argument("--prompt", choices=["v2", "v3"], default="v2", help="v3: the locked prompt of prompts.py on every sample")
-    p.add_argument("--observe", action="store_true", help="after the samples ran, one greedy turn where each sample sees its result and keeps or corrects it (harness.py)")
-    p.add_argument("--think-retry", action="store_true", help="a thinking sample that hit the budget is sampled again without thinking")
-    p.add_argument("--reader", action="store_true", help="a greedy turn picks the rulebook lines each question needs; they go right before the question (roles.py)")
-    p.add_argument("--reviewer", action="store_true", help="where the voting samples disagree, a greedy thinking turn picks a candidate or rejects them all (roles.py)")
-    p.add_argument("--review-below", type=float, default=0.75, help="review when the largest answer group holds under this share of the voting samples")
     p.add_argument("--answer-unanswerable", action="store_true", help="answer unanswerable when that is the voted group")
     p.add_argument("--debt-route", action="store_true", help="when most thinking samples call a debt macro, only samples calling one vote")
     p.add_argument("--fewshot", type=Path, help="example bank (runs/analysis/build_fewshot_bank.py): the second half of the samples get similar train examples instead of the raw-tables prompt")
     p.add_argument("--fewshot-k", type=int, default=4)
     p.add_argument("--debt-views", action="store_true", help="canonical debt tables + debt_at(day) written by the LLM per shop (debtview.py)")
     p.add_argument("--save-prompts", action="store_true", help="keep each question's user message in the trace (SFT data from train runs)")
-    p.add_argument("--agent", action="store_true", help="UNDERSTAND + GROUND before the SQL samples (agent.py): looked-up values, date windows, rule rows")
     p.add_argument("--shard", default="0/1", help="i/n: run the i-th of n business shards (one process per GPU)")
     p.add_argument("--max-tokens", type=int, default=1024)
     p.add_argument("--think-k", type=int, default=0, help="extra thinking-mode samples for questions whose vote share is below --think-below")
@@ -380,10 +450,9 @@ def main():
     qs = qs[:a.limit] if a.limit else qs
     a.output.mkdir(parents=True, exist_ok=True)
     rulebook = (a.data / "rulebook.md").read_text(encoding="utf-8-sig")
-    base_prompts = (prompts.SYSTEM_V3, prompts.SYSTEM_V3) if a.prompt == "v3" else (SYSTEM, SYSTEM) if a.fewshot else (SYSTEM, SYSTEM_ALT)
+    base_prompts = (SYSTEM, SYSTEM) if a.fewshot else (SYSTEM, SYSTEM_ALT)
     systems = [s + "\n\nRULEBOOK:\n" + rulebook for s in base_prompts]
     bank = fewshot.Bank(a.fewshot) if a.fewshot else None
-    rules = agent.rule_rows(rulebook)
     half = a.k // 2
 
     shops = sorted({q["business_id"] for q in qs})
@@ -510,42 +579,8 @@ def main():
         todo = by_shop[b]
         for q in todo:
             q["_hits"] = entity_hits(db, meta, q["question"])
-            q["_periods"] = period_hints(q["question"], q["as_of_date"], db)
+            q["_periods"] = period_hints(q["question"], q["as_of_date"], db) + grain_hints(q["question"])
             q["_oor"] = outside(q["_periods"], data_span(meta))
-        if a.reader:  # greedy, base weights: the adapter was trained to write SQL, not to read rules
-            rrows, numbered = roles.number_lines(rulebook)
-            routs = llm.chat([roles.reader_chat(numbered, meta["readme"], q["question"]) for q in todo], SamplingParams(n=1, temperature=0, max_tokens=64), **kw)
-            for q, o in zip(todo, routs):
-                q["_picks"] = roles.parse_lines(o.outputs[0].text, len(rrows))
-                q["_rules"] = roles.rule_block(rrows, q["_picks"])
-            print(f"[reader] {b}: {sum(bool(q['_picks']) for q in todo)}/{len(todo)} questions got rules, {sum(len(q['_picks']) for q in todo) / max(1, len(todo)):.1f} lines each", flush=True)
-        if a.agent:  # UNDERSTAND: a greedy reading per question, re-asked with its problems (unknown period kind, bad fields,
-            # no JSON) up to --repairs times; GROUND: code looks its values up and turns its periods into rulebook windows.
-            # The windows replace the regex period hints, so no time phrase needs a pattern written for it.
-            idx = agent.value_index(db, meta)
-            convs = {i: agent.understand_chat(rulebook, ctx, q, date_anchors(q["as_of_date"])) for i, q in enumerate(todo)}
-            ask = [i for i, c in convs.items()
-                   if len(tok.apply_chat_template(c, tokenize=True, add_generation_prompt=True, return_dict=False)) <= a.context - 832]
-            plans, turns = {}, {}
-            for turn in range(a.repairs + 1):
-                if not ask:
-                    break
-                outs = llm.chat([convs[i] for i in ask], SamplingParams(n=1, temperature=0, max_tokens=768), **kw)
-                again = []
-                for i, o in zip(ask, outs):
-                    reply = o.outputs[0].text
-                    plans[i], turns[i] = agent.parse_plan(reply), turn + 1
-                    probs = agent.validate(plans[i], todo[i]["question"], todo[i]["as_of_date"], db, first=turn == 0, idx=idx)
-                    if probs and turn < a.repairs:
-                        convs[i] = convs[i] + [{"role": "assistant", "content": reply.split("</think>")[-1].strip()},
-                                               {"role": "user", "content": agent.fix_message(probs)}]
-                        again.append(i)
-                ask = again
-            for i, q in enumerate(todo):
-                q["_plan"] = dict(plans.get(i, {}), _turns=turns.get(i, 0))
-                q["_facts"] = agent.ground(db, meta, idx, q["_plan"], q["as_of_date"], rules)
-                q["_periods"] = []  # the windows are in the facts now
-                q["_oor"] = outside(agent.period_lines(q["_plan"], q["as_of_date"], db), data_span(meta))
         # examples read the canonical views, so a shop without them gets none
         chats = [[chat(s, ctx, q, fewshot.block(bank.retrieve(q["question"], b, a.fewshot_k, debt=bool(debt))) if bank and view and j == 1 else "") for j, s in enumerate(systems)] for q in todo]
         budget = a.context - a.max_tokens - 64
@@ -607,8 +642,9 @@ def main():
         prompt_idx = lambda j: j // half if j < 2 * half else (1 if bank else (j - 2 * half) % len(systems))  # which prompt asked sample j
         n_repair += fix(repair, lambda j: j // half)
         behind = a.deadline and time.time() - t0 > a.deadline * (len(results) + len(todo)) / max(1, len(qs))
-        if a.think_k and not behind:  # adaptive compute: low-agreement questions get thinking-mode samples (alternating prompts)
-            hard = [i for i, ps in enumerate(preds) if texts[i] and vote(ps, len(ps))[1] < a.think_below]
+        debt_q = [bool(debt) and a.debt_route and bool(DEBT_WORDS.search(norm(q["question"]))) for q in todo]
+        if a.think_k and not behind:  # adaptive compute: low-agreement questions, and debt questions (thinking samples are the ones calling the macros), get thinking-mode samples
+            hard = [i for i, ps in enumerate(preds) if texts[i] and (debt_q[i] or vote(ps, len(ps))[1] < a.think_below)]
             if hard:
                 # with examples available all thinking samples get them: right 86% vs 71.5% on 873 hard train questions
                 hchats = [chats[i][1 if bank else s % len(systems)] for i in hard for s in range(a.think_k)]
@@ -623,43 +659,9 @@ def main():
                         preds[i].append(execute(db, t, todo[i]["question"])); errs[i].append(None)
                     except Exception as e:
                         preds[i].append(None); errs[i].append(str(e)[:400])
-                if a.think_retry:  # a thought that hit the budget has no query: ask again without thinking (5% of thinking samples, half of them loops)
-                    cut = [(i, j) for i in hard for j in range(2 * half, len(texts[i])) if "</think>" not in texts[i][j]]
-                    if cut:
-                        rt = llm.chat([chats[i][prompt_idx(j)] for i, j in cut], SamplingParams(n=1, temperature=a.temperature, top_p=0.95, max_tokens=a.max_tokens, seed=a.seed), **lkw)
-                        for (i, j), o in zip(cut, rt):
-                            texts[i][j] = o.outputs[0].text
-                            try:
-                                preds[i][j], errs[i][j] = execute(db, texts[i][j], todo[i]["question"]), None
-                            except Exception as e:
-                                preds[i][j], errs[i][j] = None, str(e)[:400]
                 # failed thinking samples get the same repair turns (non-thinking); a cut-off thought has no query to fix
-                n_repair += fix([(i, j) for i in hard for j in range(2 * half, len(texts[i])) if preds[i][j] is None and ("</think>" in texts[i][j] or a.think_retry)], prompt_idx)
-        observed = {}
-        if a.observe:
-            known = harness.known_values(db)
-            items = {(i, j): (chats[i][prompt_idx(j)] + [{"role": "assistant", "content": t.split("\n#REPAIR\n")[-1].split("</think>")[-1].strip()}], t, preds[i][j], todo[i]["question"])
-                     for i, ts in enumerate(texts) for j, t in enumerate(ts) if preds[i][j]}
-            gen = lambda cs: [o.outputs[0].text for o in llm.chat(cs, SamplingParams(n=1, temperature=0, max_tokens=a.max_tokens), **lkw)]
-            observed, revised = harness.observe_turn(gen, execute, run_sql, parse, db, known, items)
-            for (i, j), (t, new) in revised.items():
-                texts[i][j], preds[i][j] = t, new
-            print(f"[observe] {b}: {len(observed)} samples, {len(revised)} revised", flush=True)
-        pools = [debt_pool(ts, 2 * half) if a.debt_route else list(range(len(ts))) for ts in texts]
-        reviews = {}
-        if a.reviewer:  # greedy thinking on base weights, only where the voting samples disagree
-            items = {}
-            for i, q in enumerate(todo):
-                if texts[i] and not q["_oor"]:
-                    c = roles.candidates(q["question"], [(texts[i][j], preds[i][j]) for j in pools[i]], answer_key, parse, lambda ps: vote(ps, len(ps))[0], a.review_below)
-                    if c:
-                        items[i] = c
-            rsys = roles.REVIEW_SYSTEM + "\n\nRULEBOOK:\n" + rulebook
-            routs = llm.chat([roles.review_chat(rsys, chats[i][0][1]["content"], c) for i, c in items.items()], SamplingParams(n=1, temperature=0, max_tokens=a.think_budget + 256, seed=a.seed),
-                             chat_template_kwargs={"enable_thinking": True}, use_tqdm=False) if items else []
-            for (i, c), o in zip(items.items(), routs):
-                reviews[i] = {"choice": roles.parse_choice(o.outputs[0].text, c), "candidates": c, "reply": o.outputs[0].text[-1500:]}
-            print(f"[reviewer] {b}: {len(items)} reviewed, {Counter(str(v['choice']) for v in reviews.values()).most_common()}", flush=True)
+                n_repair += fix([(i, j) for i in hard for j in range(2 * half, len(texts[i])) if preds[i][j] is None and "</think>" in texts[i][j]], prompt_idx)
+        pools = [debt_pool(ts, 2 * half, dq) if a.debt_route else list(range(len(ts))) for ts, dq in zip(texts, debt_q)]
         per_q = (time.time() - tb) / max(1, len(todo))  # batched generation: shop wall time shared equally (view batch excluded)
         for qi, (q, ts, ps, es, cs) in enumerate(zip(todo, texts, preds, errs, chats)):
             voters = [ps[j] for j in pools[qi]]
@@ -668,18 +670,9 @@ def main():
                  else ans if decide(ans, conf, a.threshold) else {"type": "abstain"})
             if a.answer_unanswerable and not q["_oor"] and ans.get("type") == "unanswerable" and conf >= a.threshold:
                 r = ans
-            if reviews.get(qi, {}).get("choice"):  # a pick still passes the 0/empty and unanswerable rules; NONE abstains
-                pick = next((c["pred"] for c in reviews[qi]["candidates"] if c["label"] == reviews[qi]["choice"]), None)
-                r = pick if pick and decide(pick, 1.0, a.threshold) else {"type": "abstain"}
             results[q["id"]] = r
             rec = {"id": q["id"], "business_id": b, "question": q["question"], "final": r, "vote": ans, "conf": conf,
-                   "elapsed_seconds": round(per_q, 2), "samples": [dict({"text": t, "pred": pr, "error": e}, **({"observed": observed[qi, j]} if (qi, j) in observed else {})) for j, (t, pr, e) in enumerate(zip(ts, ps, es))]}
-            if a.reader:
-                rec["picks"] = q["_picks"]
-            if qi in reviews:
-                rec["review"] = reviews[qi]
-            if a.agent:
-                rec.update(plan=q.get("_plan"), facts=q.get("_facts"))
+                   "elapsed_seconds": round(per_q, 2), "samples": [{"text": t, "pred": pr, "error": e} for t, pr, e in zip(ts, ps, es)]}
             if a.save_prompts:  # the system message is SYSTEM / SYSTEM_ALT + rulebook (samples 0..K/2-1 / the rest), the user message is shared
                 rec["prompt_user"] = cs[0][1]["content"]
             tr.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")

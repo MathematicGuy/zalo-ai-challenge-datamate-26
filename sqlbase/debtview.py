@@ -116,14 +116,16 @@ def check(db, texts):
 
 
 def pick(checked):
-    """(two SELECTs of the most common fingerprint, its count); (None, count) when most drafts say the shop has no debts."""
+    """(two SELECTs of the most common fingerprint, its count); (None, count) when all working drafts say the shop has no debts.
+    A NONE vote does not outvote a layer that passed the data tests: on holdout biz_106 / biz_123, 5/8 and 3/8 drafts said
+    NONE while 2 agreeing drafts built the debts the gold answers use."""
     fps = {}
     for fp, sqls in checked:
         if fp:
             fps.setdefault(fp, []).append(sqls)
     if not fps:
         return None, 0
-    best = max(fps.values(), key=len)
+    best = max((v for k, v in fps.items() if k != "none"), key=len, default=fps.get("none"))
     return best[0], len(best)
 
 

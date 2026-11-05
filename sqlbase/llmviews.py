@@ -209,6 +209,18 @@ def catalog_test(db, prefix):
                          "catalog; match it on every way a line names the item (code or abbreviation, and full name)" + missed_names(db, prefix, "product_group IS NULL"))
 
 
+def time_test(db, prefix, sql):
+    """Drafting only: order_ts without a time of day while a table the SELECT reads records order times (e.g. "Thời gian" holds
+    the day, "Thời gian tạo" the time) makes every shift / hour question 0. The fingerprint cannot see it: it has no times."""
+    if (db.execute(f"SELECT avg(CAST(order_ts <> date_trunc('day', order_ts) AS INT)) FROM {prefix}sales_all").fetchone()[0] or 0) > 0.02:
+        return
+    cols = db.execute("SELECT table_name, column_name FROM information_schema.columns WHERE data_type LIKE 'TIMESTAMP%' AND table_name <> 'calendar' "
+                      "AND NOT starts_with(table_name, 'v_') AND NOT starts_with(table_name, '_') ORDER BY 1, 2").fetchall()
+    for tab, col in cols:
+        if f'"{tab}"' in sql and (db.execute(f'SELECT avg(CAST("{col}" <> date_trunc(\'day\', "{col}") AS INT)) FROM "{tab}"').fetchone()[0] or 0) > 0.5:
+            raise ValueError(f'order_ts has no time of day, but "{tab}"."{col}" records the time: take order_ts from it, so questions by hour or shift work')
+
+
 def check(db, texts):
     """Execute every draft into scratch tables -> [(fingerprint, sql) or (None, error)]."""
     out = []
@@ -219,6 +231,7 @@ def check(db, texts):
             sql = parse_select(t)
             fp = build(db, sql, "_cand_")
             catalog_test(db, "_cand_")
+            time_test(db, "_cand_", sql)
             out.append((fp, sql))
         except Exception as e:
             out.append((None, str(e)[:300]))
