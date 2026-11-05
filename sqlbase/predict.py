@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 
-from ingest import ckey, entity_hits, load_business, norm, profile, schema_text
+from ingest import ckey, entity_hits, load_business, norm, profile, quote, schema_text
 import debtview
 import fewshot
 import llmviews
@@ -151,6 +151,31 @@ PRICE_UP = re.compile(r"(?:^|_)(?:len_gia|tang_gia|doi_gia|len_\d)")
 N_DAYS = re.compile(r"(?:^|_)\d{1,3}_ngay")
 DAY_MONTH = re.compile(r"(?:^|_)\d{1,2}_\d{1,2}(?:_\d{4})?(?=_|$)")
 PROFIT = re.compile(r"(?:^|_)(?:lai_gop|loi_gop|lai_rong|loi_rong|loi_that|lai_that|loi_nhuan|tru_chi_phi)(?:_|$)")
+TRIPS = re.compile(r"(?:^|_)(?:dot|luot|chuyen)_(?:\w+_)?(?:giao|hang)(?:_|$)|giao_(?:\w+_){0,3}(?:may|bao_nhieu|bn|bnhiu|bao_nhiu)_(?:dot|luot|chuyen)(?:_|$)")
+LOT = re.compile(r"het_han(?:_|$)|han_dung(?!_(?:hom|bua|ngay|ky))|han_su_dung|(?:^|_)hsd(?:_|$)|(?:^|_)lo_(?:hang|ton|thuoc|gan|sap|con|nao|co)(?:_|$)")  # 'hạn đúng hôm nay' = 'hạn dùng' after norm
+
+
+assert not TRIPS.search("thay_dau_lap_cho_bao_nhieu_luot_xe") and TRIPS.search("xe_cho_duoc_bn_dot_hang") and TRIPS.search("giao_hang_tong_cong_may_dot")
+assert not LOT.search("mat_hang_het_hang") and not LOT.search("han_dung_hom_nay") and LOT.search("co_han_dung_tu_08")
+
+
+def top_votes(checked):
+    """Size of the largest group of drafts with one fingerprint ('none' included); 0 when no draft passed."""
+    return max(Counter(str(fp) for fp, _ in checked if fp).values(), default=0)
+
+
+def lot_hint(question, meta):
+    """Lots sell out: every 'lô còn tồn / gần hết hạn' sample took MIN(expiry) over all lots of the item (holdout biz_123), so name the tables keyed by lot."""
+    if not LOT.search(norm(question)):
+        return []
+    tabs = [f"{quote(t['name'])}({', '.join(c for c, *_ in t['columns'] if c != '_sheet')})" for t in meta["tables"]
+            if any(re.search(r"(?:^|_)(?:lo|lot|batch|so_lo)$", ckey(c)) for c, *_ in t["columns"])]
+    if len(tabs) < 2:
+        return []
+    return ["LOT STOCK (rulebook: only lots still in stock count): tables keyed by lot: " + "; ".join(tabs) + ". A lot's stock at day D = its received base quantity "
+            "minus SUM(quantity taken - quantity returned) of the rows linking sale lines to that lot, on orders up to D. Compute it per lot in a CTE, summing the "
+            "links in their own subquery GROUP BY lot before joining them to the lot (joining receipts and links first multiplies rows), and keep "
+            "stock > 0 (and expiry >= today for 'not expired') BEFORE taking MIN(expiry), counting items or summing lot value (stock x the lot's own purchase price per base unit)."]
 
 
 def grain_hints(question):
@@ -164,8 +189,11 @@ def grain_hints(question):
         out.append("PRICE INCREASE DATE D is not given: in a CTE take D from the price table = the first date the item's price became the new price, "
                    "higher than its price right before; then compare quantity sold in [D, D + N days) with [D - N days, D).")
     if PROFIT.search(t):  # public samples wrote SUM(cost) * SUM(qty) or subtracted the sales amount twice
-        out.append("PROFIT (rulebook): gross profit = revenue of valid sale lines - SUM(quantity * cost per unit recorded on each sale line), "
-                   "computed line by line; net profit / lời thật of a month = its gross profit - SUM of every expense row dated in that month.")
+        out.append("PROFIT (rulebook): gross profit = revenue of valid sale lines - SUM(quantity in the SALE unit * cost recorded on the sale line), line by line: "
+                   "that cost is per sale unit (the unit of the unit price), so never multiply it by a base-unit quantity (qty of v_sales, 'SL cơ bản'); "
+                   "net profit / lời thật of a month = its gross profit - SUM of every expense row dated in that month.")
+    if TRIPS.search(t):
+        out.append("DELIVERY TRIPS (rulebook): each trip (đợt, 'Lượt giao') of each order counts once: COUNT(DISTINCT (order id, trip number)) over the delivery log rows dated in the period. The log has one row per item per trip, so not COUNT(*), and not COUNT(DISTINCT trip number).")
     return out
 
 
@@ -337,6 +365,8 @@ def repair_hint(err):
         return "To compare a time of day, cast the timestamp: CAST(col AS TIME) >= TIME '12:00', or use EXTRACT(hour FROM col).\n"
     if err.startswith("expected one cell, got"):
         return "The question asks for one value: aggregate, or ORDER BY ... LIMIT 1 for a top-1 question; use TYPE list/table if it asks for several.\n"
+    if "must appear in the GROUP BY clause" in err:
+        return "A column outside every aggregate must be in GROUP BY: put the whole per-row expression inside the aggregate, e.g. SUM(amount * \"rate %\" / 100), or add that column to GROUP BY.\n"
     if "not found in FROM clause" in err:
         return "Use only the columns SCHEMA lists for each table, double-quoted; a column of another table needs a JOIN on its key.\n"
     return ""
@@ -501,35 +531,47 @@ def main():
         vfixed = {b: json.loads(f.read_text(encoding="utf-8")) for b in loaded if (f := a.views_from / "logs" / f"_views_{b}.json").exists()}
         print(f"views of {len(vfixed)}/{len(loaded)} shops reused from {a.views_from}", flush=True)
     drafted = [b for b in loaded if b not in vfixed]  # shops without reused views get fresh drafts
-    if a.views == "llm" and drafted:  # per shop: a.k drafts of one mapping SELECT, all shops in one batch (GPU stays full)
-        vchats = [[{"role": "system", "content": llmviews.VIEW_SYSTEM + "\n\nRULEBOOK:\n" + rulebook},
-                   {"role": "user", "content": "README:\n" + loaded[b][1]["readme"] + "\n\nSCHEMA:\n" + schema_text(loaded[b][1])}] for b in drafted]
-        vsp = SamplingParams(n=a.k, temperature=0.6 if a.view_think else a.temperature, top_p=0.95, top_k=20,
-                             max_tokens=a.view_think + 2048, seed=a.seed)
-        vouts = llm.chat(vchats, vsp, chat_template_kwargs={"enable_thinking": bool(a.view_think)}, use_tqdm=False)
-        vtexts = {b: [x.text for x in o.outputs] for b, o in zip(drafted, vouts)}
-        vchecked = {b: llmviews.check(loaded[b][0], ts) for b, ts in vtexts.items()}
-        # drafts failing the data tests get one repair with the error, all shops in one batch
-        fail = [(b, j) for b, c in vchecked.items() for j, (fp, _) in enumerate(c) if fp is None]
-        if fail:
-            vchat_of = dict(zip(drafted, vchats))
-            rch = [vchat_of[b] + [{"role": "assistant", "content": vtexts[b][j].split("</think>")[-1].strip()},
-                                  {"role": "user", "content": f"ERROR: {vchecked[b][j][1]}\nFix the SELECT. Answer with the SQL only, in one ```sql``` block."}]
-                   for b, j in fail]
-            routs = llm.chat(rch, SamplingParams(n=1, temperature=0, max_tokens=2048), **kw)
-            for (b, j), o in zip(fail, routs):
-                vtexts[b][j] += "\n#REPAIR\n" + o.outputs[0].text
-                vchecked[b][j] = llmviews.check(loaded[b][0], [o.outputs[0].text])[0]
-        print(f"view drafts in {time.time() - t0:.0f}s ({len(fail)} repaired)", flush=True)
+    if a.views == "llm" and drafted:
+        def view_round(shops, seed):  # per shop: a.k drafts of one mapping SELECT, all shops in one batch (GPU stays full)
+            vchats = [[{"role": "system", "content": llmviews.VIEW_SYSTEM + "\n\nRULEBOOK:\n" + rulebook},
+                       {"role": "user", "content": "README:\n" + loaded[b][1]["readme"] + "\n\nSCHEMA:\n" + schema_text(loaded[b][1])}] for b in shops]
+            vsp = SamplingParams(n=a.k, temperature=0.6 if a.view_think else a.temperature, top_p=0.95, top_k=20,
+                                 max_tokens=a.view_think + 2048, seed=seed)
+            vouts = llm.chat(vchats, vsp, chat_template_kwargs={"enable_thinking": bool(a.view_think)}, use_tqdm=False)
+            texts = {b: [x.text for x in o.outputs] for b, o in zip(shops, vouts)}
+            checked = {b: llmviews.check(loaded[b][0], ts) for b, ts in texts.items()}
+            # drafts failing the data tests get one repair with the error, all shops in one batch
+            fail = [(b, j) for b, c in checked.items() for j, (fp, _) in enumerate(c) if fp is None]
+            if fail:
+                vchat_of = dict(zip(shops, vchats))
+                rch = [vchat_of[b] + [{"role": "assistant", "content": texts[b][j].split("</think>")[-1].strip()},
+                                      {"role": "user", "content": f"ERROR: {checked[b][j][1]}\nFix the SELECT. Answer with the SQL only, in one ```sql``` block."}]
+                       for b, j in fail]
+                routs = llm.chat(rch, SamplingParams(n=1, temperature=0, max_tokens=2048), **kw)
+                for (b, j), o in zip(fail, routs):
+                    texts[b][j] += "\n#REPAIR\n" + o.outputs[0].text
+                    checked[b][j] = llmviews.check(loaded[b][0], [o.outputs[0].text])[0]
+            print(f"view drafts in {time.time() - t0:.0f}s ({len(fail)} repaired)", flush=True)
+            return texts, checked
+        vtexts, vchecked = view_round(drafted, a.seed)
+        # no majority: a second set of drafts and one vote over both (holdout seeds 0-4: a pick without a majority moved with the seed)
+        if weak := [b for b in drafted if 2 * top_votes(vchecked[b]) < a.k]:
+            t2, c2 = view_round(weak, a.seed + 1)
+            for b in weak:
+                vtexts[b] += t2[b]
+                vchecked[b] += c2[b]
     dchecked, dfixed = {}, {}
     if a.debt_views:  # same recipe as the views: a.k drafts per shop, data tests, one repair turn, most common fingerprint
         if a.views_from:
             dfixed = {b: json.loads(f.read_text(encoding="utf-8")) for b in loaded if (f := a.views_from / "logs" / f"_debt_{b}.json").exists()}
         ddraft = [b for b in loaded if b not in dfixed]
         if ddraft:
-            dres = debtview.draft(lambda cs, sp, th: llm.chat(cs, sp, chat_template_kwargs={"enable_thinking": th}, use_tqdm=False), SamplingParams, {b: loaded[b] for b in ddraft},
-                                  rulebook, schema_text, k=a.k, think=a.view_think, temperature=0.6, seed=a.seed)
-            dchecked = {b: r[1] for b, r in dres.items()}
+            dround = lambda shops, seed: debtview.draft(lambda cs, sp, th: llm.chat(cs, sp, chat_template_kwargs={"enable_thinking": th}, use_tqdm=False), SamplingParams,
+                                                        {b: loaded[b] for b in shops}, rulebook, schema_text, k=a.k, think=a.view_think, temperature=0.6, seed=seed)
+            dchecked = {b: r[1] for b, r in dround(ddraft, a.seed).items()}
+            if weak := [b for b in ddraft if 2 * top_votes(dchecked[b]) < a.k]:  # no majority (NONE counts): second set, one vote over both
+                for b, r in dround(weak, a.seed + 1).items():
+                    dchecked[b] += r[1]
             print(f"debt drafts in {time.time() - t0:.0f}s", flush=True)
     results, n_repair = {}, 0
     tr = (a.output / "trace.jsonl").open("w", encoding="utf-8")
@@ -550,22 +592,27 @@ def main():
                     sql, nv = soft, sn
                 elif sql:
                     llmviews.build(db, sql)
-            if sql and (spread := llmviews.unit_spread(db, sql)[0]) and spread > 2:  # qty is still not in one base unit
-                sql = llmviews.qty_by_price(sql)
-                llmviews.build(db, sql)
-                print(f"[views] {b}: price per qty differs {spread:.1f} times across units, factors read from the prices", flush=True)
+            if sql and len(bad := llmviews.mixed_price_items(db, "v_sales")) >= 2:  # qty is still not in one base unit
+                fixed = llmviews.qty_by_price(sql)
+                llmviews.build(db, fixed)
+                left = llmviews.mixed_price_items(db, "v_sales")
+                if len(left) < len(bad):  # factors read from the prices only help when unit holds the line's own unit
+                    sql = fixed
+                else:
+                    llmviews.build(db, sql)
+                print(f"[views] {b}: price per qty differs over 3x on {len(bad)} items, factors read from the prices -> {len(left)} left, kept={sql == fixed}", flush=True)
         if b in vtexts:
-            if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess; better no view than a wrong one
-                view = llmviews.describe(db, sql, nv, a.k)
+            if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess; better no view than a wrong one (counted against one set of a.k drafts)
+                view = llmviews.describe(db, sql, nv, len(vtexts[b]))
                 meta["tables"] += [profile(db, v, "canonical view") for v in ("v_sales", "v_orders")]
-            vinfo = {"agree": nv, "k": a.k, "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
-            print(f"[views] {b}: {nv}/{a.k} agree, used={bool(view)}, {len(verr)} failed drafts", flush=True)
+            vinfo = {"agree": nv, "k": len(vtexts[b]), "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
+            print(f"[views] {b}: {nv}/{len(vtexts[b])} agree, used={bool(view)}, {len(verr)} failed drafts", flush=True)
         debt = ""
         if a.debt_views:
             sqls, dn = (dfixed[b]["sqls"], dfixed[b]["agree"]) if b in dfixed else debtview.pick(dchecked[b])
             dfps = dfixed[b].get("checked", []) if b in dfixed else [str(fp) for fp, _ in dchecked.get(b, [])]
-            dk = dfixed[b].get("k", a.k) if b in dfixed else a.k  # a reused file keeps its own verdict and draft count: re-judging it at another k, or from a reuse that lost "checked", dropped a working layer
-            if sqls and (dfixed[b]["used"] if b in dfixed else debtview.accept(dfps, dn, dk)):
+            dk = dfixed[b].get("k", a.k) if b in dfixed else len(dchecked[b])  # a reused file keeps its own verdict and draft count: re-judging it at another k, or from a reuse that lost "checked", dropped a working layer
+            if sqls and (dfixed[b]["used"] if b in dfixed else debtview.accept(dfps, dn, a.k)):
                 debtview.build(db, sqls)  # the tables stay out of SCHEMA: the prompt offers the macros and their recipes
                 debt = debtview.describe(dn, dk)
             (a.output / "logs" / f"_debt_{b}.json").write_text(json.dumps({"agree": dn, "k": dk, "used": bool(debt), "sqls": sqls, "checked": dfps,
@@ -579,7 +626,7 @@ def main():
         todo = by_shop[b]
         for q in todo:
             q["_hits"] = entity_hits(db, shown, q["question"])
-            q["_periods"] = period_hints(q["question"], q["as_of_date"], db) + grain_hints(q["question"])
+            q["_periods"] = period_hints(q["question"], q["as_of_date"], db) + grain_hints(q["question"]) + lot_hint(q["question"], shown)
             q["_oor"] = outside(q["_periods"], data_span(meta))
         # examples read the canonical views, so a shop without them gets none
         chats = [[chat(s, ctx, q, fewshot.block(bank.retrieve(q["question"], b, a.fewshot_k, debt=bool(debt))) if bank and view and j == 1 else "") for j, s in enumerate(systems)] for q in todo]

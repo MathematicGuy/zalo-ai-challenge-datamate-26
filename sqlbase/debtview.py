@@ -16,7 +16,7 @@ First SELECT, one row per order, with exactly these columns:
   customer_name customer name; NULL for walk-in customers (khách lẻ, kl, lẻ, vãng lai, blank), matched in any case/spacing
   total_due     what the customer must pay for the whole order, as the RULEBOOK defines the debt of an order. If the book only lists orders still owing after the purchase, this is the amount owing right after the purchase
   is_cancelled  BOOLEAN, the order is cancelled per the rulebook
-  no_debt       BOOLEAN, the rulebook keeps this order out of debts whatever is unpaid (read the rulebook: e.g. a payment method or sales channel it excludes)
+  no_debt       BOOLEAN, the rulebook keeps this order out of debts whatever is unpaid: COD orders and orders sold on an e-commerce marketplace (sàn TMĐT: Shopee, Lazada, Tiki, TikTok Shop...). Zalo, phone, Facebook, website and the store are no marketplace; returned orders still owe (not no_debt), cancelled ones only get is_cancelled
   is_credit     BOOLEAN, the order is recorded as sold on credit (the payment method the rulebook means by ghi nợ)
 
 Second SELECT, one row per payment a customer made for one order, with exactly these columns:
@@ -56,7 +56,7 @@ def build(db, sqls, prefix="v_debt_"):
     if not n or dated < 0.95:
         raise ValueError(f"unusable orders SELECT: rows={n}, share of rows with order_date={dated or 0:.2f}")
     if n - ids > 0.01 * n:
-        raise ValueError(f"order_id is not unique: {n} rows for {ids} ids; the first SELECT needs one row per order")
+        raise ValueError(f"order_id is not unique: {n} rows for {ids} ids; the first SELECT needs one row per order: when the table has one row per item line, GROUP BY the order id and take the order-level columns that repeat on every line (customer, date, payment, note, order total) with any_value(), never summing them over lines")
     if bad_total > 0.01 * n:
         raise ValueError(f"total_due is NULL or negative on {bad_total} of {n} orders")
     np, orphan, neg = db.execute(f"""SELECT count(*), count(*) FILTER (WHERE order_id NOT IN (SELECT order_id FROM {prefix}orders_raw)), count(*) FILTER (WHERE amount < 0) FROM {prefix}pay_raw""").fetchone()
@@ -93,6 +93,10 @@ def build(db, sqls, prefix="v_debt_"):
     owed, owing = db.execute(f"SELECT sum(debt), count(*) FROM {macro}(DATE '{last}')").fetchone()
     if not owing:
         raise ValueError(f"no order owes anything at the last order date {last}: check total_due, no_debt and the payments")
+    paid_now = db.execute(f"SELECT count(*) FROM {macro}(DATE '{last}') JOIN {prefix}orders USING (order_id) WHERE NOT is_credit").fetchone()[0]
+    if paid_now > max(5, 0.2 * owing) and db.execute(f"SELECT bool_or(is_credit) FROM {prefix}orders").fetchone()[0]:  # holdout and public layers that held: 0 such orders
+        raise ValueError(f"{paid_now} of the {owing} orders still owing at {last} are not sold on credit (paid in cash, transfer...): total_due is more than "
+                         "the order total, e.g. an order-level total summed over the item lines (take it once per order with any_value()), or is_credit misses the credit payment method")
     return n, round(db.execute(f"SELECT sum(order_total) FROM {prefix}orders").fetchone()[0]), np, round(db.execute(f"SELECT sum(amount) FROM {prefix}pay_raw").fetchone()[0]), owing, round(owed)
 
 

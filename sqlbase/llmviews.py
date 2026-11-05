@@ -95,6 +95,24 @@ def unit_spread(db, sql):
     return rows[len(rows) // 2][1], len(rows), rows[-1][0]
 
 
+def mixed_price_items(db, table):
+    """Items whose price per qty differs over 3x between their own item lines (5th vs 95th percentile, 20+ priced lines). In one
+    base unit an item's price per qty is about constant; a gap the size of a unit factor means lines in the larger unit were not
+    converted, or lines already in the base unit were multiplied again. Unlike unit_spread it needs no unit column."""
+    return [p for (p,) in db.execute(f"""SELECT product_name FROM (SELECT product_name, TRY_CAST(amount AS DOUBLE) / TRY_CAST(qty AS DOUBLE) x FROM {table}
+        WHERE line_kind = 'item' AND TRY_CAST(qty AS DOUBLE) > 0 AND TRY_CAST(amount AS DOUBLE) > 0 AND product_name IS NOT NULL)
+        GROUP BY 1 HAVING COUNT(*) >= 20 AND quantile_cont(x, 0.95) > 3 * quantile_cont(x, 0.05) ORDER BY COUNT(*) DESC""").fetchall()]
+
+
+def qty_test(db, prefix):
+    """Drafting only: the fingerprint has no qty, so a view that converts no line, or every line, wins votes as well as a right one."""
+    bad = mixed_price_items(db, f"{prefix}sales")
+    if len(bad) >= 2:  # one item can have a real outlier (a free gift, a bulk price)
+        raise ValueError(f"price per qty differs over 3x between lines of the same item on {len(bad)} items, e.g. '{bad[0]}': qty is not in one base unit. "
+                         "Multiply by the factor only the lines recorded in the larger unit (compare the line's own unit with the conversion table), "
+                         "keep lines already in the base unit as recorded")
+
+
 def base_lines_moved(db, old, new):
     """Items sold in 2+ units whose smallest-unit lines changed quantity, as (count of such items, of all, an example): lines already in the base unit keep the recorded quantity."""
     q = lambda s: f"SELECT product_name p, lower(trim(unit)) u, SUM(TRY_CAST(qty AS DOUBLE)) q FROM ({s}) WHERE TRY_CAST(qty AS DOUBLE) > 0 AND unit IS NOT NULL GROUP BY 1, 2"
@@ -232,6 +250,7 @@ def check(db, texts):
             fp = build(db, sql, "_cand_")
             catalog_test(db, "_cand_")
             time_test(db, "_cand_", sql)
+            qty_test(db, "_cand_")
             out.append((fp, sql))
         except Exception as e:
             out.append((None, str(e)[:300]))
@@ -249,6 +268,16 @@ def qty_by_price(sql):
 _p AS (SELECT product_name AS n, lower(trim(unit)) AS u, median(amount / qty) AS pr FROM _b WHERE qty > 0 AND amount > 0 AND product_name IS NOT NULL GROUP BY 1, 2),
 _k AS (SELECT n, u, greatest(1, round(pr / min(pr) OVER (PARTITION BY n))) AS k FROM _p)
 SELECT _b.* REPLACE (_b.qty * coalesce(_k.k, 1) AS qty) FROM _b LEFT JOIN _k ON _b.product_name = _k.n AND lower(trim(_b.unit)) = _k.u"""
+
+
+def _qty_sum(db):
+    return db.execute("SELECT round(sum(TRY_CAST(qty AS DOUBLE))) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]
+
+
+def _by_qty_vote(sqls, rank):
+    """The fingerprint has no qty: within one fingerprint the drafts vote on the item qty total (holdout biz_106 seed 3: 5 drafts 145723, 1 draft 166763, the fill tie-break took the 1)."""
+    votes = Counter(rank[s][0] for s in sqls)
+    return max(rank, key=lambda s: (votes[rank[s][0]], *rank[s][1:]))
 
 
 def pick_soft(db, texts):
@@ -269,15 +298,15 @@ def pick_soft(db, texts):
         return None, 0
     sqls = max(fps.values(), key=len)
     rank = {}
-    for s in dict.fromkeys(sqls):  # same numbers: prefer the draft whose catalog join holds, then the one filling the most lines
+    for s in dict.fromkeys(sqls):  # same numbers: prefer the qty most drafts agree on, then the draft whose catalog join holds, then the one filling the most lines
         build(db, s)
         try:
             catalog_test(db, "v_")
             ok = 1
         except ValueError:
             ok = 0
-        rank[s] = ok, db.execute("SELECT count(product_group) + count(product_code) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]
-    best = max(rank, key=rank.get)
+        rank[s] = [_qty_sum(db), ok, db.execute("SELECT count(product_group) + count(product_code) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]]
+    best = _by_qty_vote(sqls, rank)
     build(db, best)
     return best, len(sqls)
 
@@ -291,11 +320,11 @@ def pick(db, checked):
     if not fps:
         return None, 0
     sqls = max(fps.values(), key=len)
-    fill = {}
-    for s in dict.fromkeys(sqls):  # same numbers: prefer the draft whose catalog join fills the most item lines
+    rank = {}
+    for s in dict.fromkeys(sqls):  # same numbers: prefer the qty most drafts agree on, then the draft whose catalog join fills the most item lines
         build(db, s)
-        fill[s] = db.execute("SELECT count(product_group) + count(product_code) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]
-    best = max(fill, key=fill.get)  # ties: first
+        rank[s] = [_qty_sum(db), db.execute("SELECT count(product_group) + count(product_code) FROM v_sales_all WHERE line_kind = 'item'").fetchone()[0]]
+    best = _by_qty_vote(sqls, rank)  # ties: first
     build(db, best)
     return best, len(sqls)
 

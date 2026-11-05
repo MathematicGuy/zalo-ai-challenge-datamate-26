@@ -348,22 +348,51 @@ def load_business(root, business, canon=False):
     return db, {"tables": info, "readme": readme}
 
 
+# regional / synonym words in product names, as norm() words: the question says 'đậu phụ rán', the menu 'đậu hũ chiên'
+SYNONYMS = [("dau_phu", "dau_hu"), ("ran", "chien"), ("ngao", "ngheu"), ("hoa_qua", "trai_cay"), ("thit_lon", "thit_heo"),
+            ("mi_chinh", "bot_ngot"), ("ke_dien_thoai", "gia_do_dien_thoai")]  # not bare "ke": "không kể"
+
+
+def canon(x):
+    s = "_" + norm(x) + "_"
+    for a, b in SYNONYMS:
+        s = s.replace("_" + a + "_", "_" + b + "_")
+    return s.strip("_")
+
+
+assert canon("Đậu phụ rán giòn") == canon("Đậu hũ chiên giòn") and canon("Kệ điện thoại") == "gia_do_dien_thoai" and canon("không kể") == "khong_ke"
+
+
 def entity_hits(db, meta, question, limit=12):
-    """Exact values of text columns whose words appear in the question (product/customer names, statuses)."""
-    q = norm(question)
-    qw = set(q.split("_"))
-    hits = []
+    """Exact values of text columns whose words appear in the question (product/customer names, statuses), synonyms folded;
+    then names that only start with what the question names (a model line)."""
+    q = canon(question)
+    qw = set(norm(question).split("_"))  # word overlap on the plain words: folded 'mực rán' must not match 'ếch chiên nước mắm'
+    hits, families = [], []
     for t in meta["tables"]:
         for col, typ, d, _ in t["columns"]:
             if typ != "VARCHAR" or not d or d > 20000:
                 continue
+            exact, fam = False, defaultdict(list)
             for (v,) in db.execute(f"SELECT DISTINCT {quote(col)} FROM {quote(t['name'])} WHERE {quote(col)} IS NOT NULL").fetchall():
-                nv = norm(v)
-                w = set(nv.split("_"))
+                nv = canon(v)
+                ws = nv.split("_")
+                w = set(norm(v).split("_"))
                 if len(nv) >= 3 and not nv.isdigit() and (("_" + nv + "_") in ("_" + q + "_") or (len(w) >= 2 and len(w & qw) / len(w) >= 0.75)):
                     hits.append((len(nv), t["name"], col, v))
+                    exact = True
+                    continue
+                k = 0  # longest leading run of the value's words the question names ('iPhone 13' of 'iPhone 13 128GB Trắng')
+                while k < len(ws) and ("_" + "_".join(ws[:k + 1]) + "_") in ("_" + q + "_"):
+                    k += 1
+                if k >= 3 or (k == 2 and any(c.isdigit() for c in ws[1])):  # a model number or a 3-word line, not two common words ('ha chi')
+                    fam[" ".join(str(v).split()[:k])].append(v)
+            if not exact:  # samples compared = 'iPhone 13' on names that only start with it and got NULL (public dev_014)
+                families += [(len(p), t["name"], col, p, vs) for p, vs in fam.items() if len(vs) >= 2]
     hits.sort(reverse=True)
-    return [f"{quote(t)}.{quote(c)} = '{v}'" for _, t, c, v in hits[:limit]]
+    families.sort(key=lambda x: (-x[0], not x[1].startswith("v_"), x[1]))  # canonical views first
+    return ([f"{quote(t)}.{quote(c)} = '{v}'" for _, t, c, v in hits[:limit]]
+            + [f"{quote(t)}.{quote(c)} starts with '{p}': {len(vs)} values, e.g. " + ", ".join(f"'{v}'" for v in vs[:3]) for _, t, c, p, vs in families[:4]])
 
 
 def schema_text(meta):
