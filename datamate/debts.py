@@ -1,6 +1,6 @@
-"""Per-shop debt layer written by the LLM, same method as llmviews: the model reads one shop's README + SCHEMA + RULEBOOK and
+"""Per-shop debt layer written by the LLM, same method as views: the model reads one shop's README + SCHEMA + RULEBOOK and
 maps its raw tables to two fixed tables (orders that can carry a debt, payments). Generic SQL below derives the debt of every
-order at any day. All drafts are executed; the most common result fingerprint wins. A rulebook debt definition on this layer
+order at any day. All drafts are executed. The most common result fingerprint wins. A rulebook debt definition on this layer
 matched 8/8 gold answers on biz_123, where the free SQL samples got 1/14 debt questions right on holdout150."""
 import re
 import threading
@@ -45,7 +45,7 @@ def parse(text):
 
 
 def build(db, sqls, prefix="v_debt_"):
-    """Materialize the tables and the debt_at macro from the two SELECTs; return a fingerprint, raise if unusable."""
+    """Materialize the tables and the debt_at macro from the two SELECTs. Return a fingerprint, raise if unusable."""
     o, p = sqls
     db.execute(f"""CREATE OR REPLACE TABLE {prefix}orders_raw AS WITH src AS ({o}) SELECT CAST(order_id AS VARCHAR) AS order_id, CAST(order_date AS DATE) AS order_date,
         nullif(trim(CAST(customer_id AS VARCHAR)), '') AS customer_id, nullif(trim(CAST(customer_name AS VARCHAR)), '') AS customer_name, CAST(total_due AS DOUBLE) AS total_due,
@@ -121,7 +121,7 @@ def check(db, texts):
 
 def draft(chat, sampling, shops, rulebook, schema_text, k=8, think=6144, temperature=0.6, seed=0, repairs=2):
     """Thinking drafts per shop, all shops in one batch, then greedy repair turns with the failed test, as for the views: without thinking the model guessed
-    column names and a single repair turn did not recover them. chat(conversations, params, enable_thinking) -> outputs; sampling is SamplingParams; shops is {shop: (db, meta)}. Returns {shop: (texts, checked)}."""
+    column names and a single repair turn did not recover them. chat(conversations, params, enable_thinking) -> outputs. Sampling is SamplingParams. Shops is {shop: (db, meta)}. Returns {shop: (texts, checked)}."""
     chats = {b: [{"role": "system", "content": DEBT_SYSTEM + "\n\nRULEBOOK:\n" + rulebook},
                  {"role": "user", "content": "README:\n" + m["readme"] + "\n\nSCHEMA:\n" + schema_text(m)}] for b, (_, m) in shops.items()}
     outs = chat(list(chats.values()), sampling(n=k, temperature=temperature, top_p=0.95, top_k=20, max_tokens=think + 2048, seed=seed), bool(think))
@@ -144,7 +144,7 @@ def draft(chat, sampling, shops, rulebook, schema_text, k=8, think=6144, tempera
 
 
 def pick(checked):
-    """(two SELECTs of the most common fingerprint, its count); (None, count) when all working drafts say the shop has no debts.
+    """(two SELECTs of the most common fingerprint, its count), or (None, count) when all working drafts say the shop has no debts.
     A NONE vote does not outvote a layer that passed the data tests: on holdout biz_106 / biz_123, 5/8 and 3/8 drafts said
     NONE while 2 agreeing drafts built the debts the gold answers use."""
     fps = {}

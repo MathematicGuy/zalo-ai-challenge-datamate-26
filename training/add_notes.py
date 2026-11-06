@@ -1,4 +1,4 @@
-"""Adds short notes before the answer of the plain rows of an SFT file, so plain samples learn to reason a little before the SQL. Greedy, base weights; a reply that breaks the format keeps the row as it was.
+"""Adds short notes before the answer of the plain rows of an SFT file, so plain samples learn to reason a little before the SQL. Greedy, base weights, a reply that breaks the format keeps the row as it was.
 python training/add_notes.py IN.jsonl OUT.jsonl [--model models/Qwen3.5-9B] [--rulebook data/train/rulebook.md] [--quant fp8|none]"""
 import argparse
 import json
@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
+sys.path.insert(0, str(R))
 from vllm import LLM, SamplingParams
 
 ASK = """Below are a question and the SQL that answers it correctly. Write the notes an analyst makes before writing that SQL: at most 5 short lines, each starting with "- ": which rulebook rules apply, which tables or columns hold the data, the date window, the grain (rows or distinct orders), the status filter and units. Keep what does not apply out. No SQL, no code block, no final answer.

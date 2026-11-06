@@ -1,14 +1,14 @@
 """Training pool and teacher work list after the view fixes of 2026-11-05 (train data only, labels from train answers).
-python analysis/v8_pool.py --fresh runs/sql_v8_gen7 --old runs/sql_v5_gen24 runs/sql_v6_holdout632 --teacher-keep runs/sql_v5_teacher_ids_00
+python training/build_pool.py --fresh runs/sql_v8_gen7 --old runs/sql_v5_gen24 runs/sql_v6_holdout632 --teacher-keep runs/sql_v5_teacher_ids_00
 - runs/sql_v8_pool/trace.jsonl: old runs without the shops of --fresh, plus --fresh
 - runs/sql_v8_teacher_keep/trace.jsonl: teacher questions on shops whose views did not change
-- analysis/v8_teacher_ids_NN.txt: pool questions no 9B sample solved and no kept teacher question covers, 40 per chunk, shops mixed
+- runs/analysis/v8_teacher_ids_NN.txt: pool questions no 9B sample solved and no kept teacher question covers, 40 per chunk, shops mixed
 - runs/views_v8_teacher/logs: the views and debt layers each pool shop was sampled with (a rejected view as no view, as at k=2 it would pass)"""
 import argparse, json, random, shutil, sys
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
-from datamate.scoring import score_one
+sys.path.insert(0, str(R))
+from datamate.scoring import score
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--fresh", type=Path, required=True); ap.add_argument("--old", type=Path, nargs="+", required=True); ap.add_argument("--teacher-keep", type=Path, nargs="*", default=[])
@@ -38,13 +38,14 @@ tk = R / "runs/sql_v8_teacher_keep"; tk.mkdir(parents=True, exist_ok=True)
 hard = []
 for line in pool:
     t = json.loads(line)
-    if t["id"] not in kept_ids and not any(s.get("pred") and score_one({"id": t["id"], **s["pred"]}, gold[t["id"]]) == 1 for s in t["samples"]):
+    if t["id"] not in kept_ids and not any(s.get("pred") and score(s["pred"], gold[t["id"]]) == 1 for s in t["samples"]):
         hard.append(t["id"])
 random.Random(0).shuffle(hard)
+(R / "runs/analysis").mkdir(parents=True, exist_ok=True)
 for f in (R / "runs/analysis").glob("v8_teacher_ids_*.txt"):
     f.unlink()
 for i in range(0, len(hard), 40):
-    (R / f"analysis/v8_teacher_ids_{i // 40:02d}.txt").write_text("\n".join(hard[i:i + 40]) + "\n")
+    (R / f"runs/analysis/v8_teacher_ids_{i // 40:02d}.txt").write_text("\n".join(hard[i:i + 40]) + "\n")
 dst = R / "runs/views_v8_teacher/logs"; dst.mkdir(parents=True, exist_ok=True)
 for f in dst.glob("*.json"):
     f.unlink()

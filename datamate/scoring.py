@@ -1,16 +1,14 @@
 """Penalized Accuracy as the Evaluation tab describes it (a local reproduction, not the organizers' hidden scorer).
 
 Per question: +1 correct, 0 abstain or missing, -1 wrong. An answer is correct only if its type equals the reference type and
-its value matches under that type's rule; strings, list items and table name cells also match any alias of the reference.
+its value matches under that type's rule. Strings, list items and table name cells also match any alias of the reference.
 Inference never imports this module: gold answers are read only by evaluation commands.
 
     python -m datamate.scoring --data data/train --pred RUN/submission.jsonl --output RUN/score.json [--questions IDS.jsonl]
-    python -m datamate.scoring --data data/train --trace RUN/trace.jsonl --output RUN/sweep.json   (vote-share threshold sweep)
 """
 import argparse
 from collections import Counter, defaultdict
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -65,12 +63,8 @@ def score(pred, gold):
     except (ValueError, TypeError, KeyError, IndexError, InvalidOperation): return -1
 
 
-score_one = score   # the name the analysis tools use
-norm_answer = norm
-
-
 def penalized_accuracy(preds, refs):
-    """preds/refs keyed by question id; questions missing from preds count as abstain."""
+    """preds/refs keyed by question id. Questions missing from preds count as abstain."""
     s = {qid: score(preds.get(qid), ref) for qid, ref in refs.items()}
     c = Counter(s.values())
     n = len(refs)
@@ -91,11 +85,6 @@ def read_jsonl(path):
 def metrics(rows):
     n = len(rows); counts = Counter(r['score'] for r in rows); answered = counts[1] + counts[-1]
     return {'N': n, 'correct': counts[1], 'wrong': counts[-1], 'abstain': counts[0], 'PA': (counts[1] - counts[-1]) / n if n else None, 'precision': counts[1] / answered if answered else None, 'coverage': answered / n if n else None, 'answer_type_accuracy': sum(r.get('type_correct', False) for r in rows) / n if n else None}
-
-
-def folds(questions, n=5, seed=20261027):
-    businesses = sorted({q['business_id'] for q in questions}, key=lambda b: hashlib.sha256(f'{seed}:{b}'.encode()).hexdigest())
-    return {b: i % n for i, b in enumerate(businesses)}
 
 
 def cluster_interval(rows, field='score', samples=2000):
@@ -126,35 +115,14 @@ def evaluate(gold, pred, questions):
     return report, rows
 
 
-def sweep(a):
-    """PA by vote-share threshold from a predict.py trace, re-voting over the first --k samples (unanswerable votes abstain)."""
-    gold = read_jsonl(a.data / 'answers.jsonl'); rows = []
-    for t in read_jsonl(a.trace).values():
-        s = t['samples'][:a.k] if a.k else t['samples']; k = len(s)
-        votes = Counter(json.dumps(x['pred'], ensure_ascii=False, sort_keys=True, default=str) for x in s if x['pred'])
-        best, n = votes.most_common(1)[0] if votes else ('{"type": "abstain"}', 0); v = json.loads(best)
-        g = gold[t['id']]
-        rows.append((n / k if v['type'] != 'unanswerable' else 0, score(v, g), any(score(x['pred'], g) == 1 for x in s if x['pred']), g['type']))
-    n = len(rows); out = {'N': n, 'oracle_any_sample_correct': sum(o for *_, o, _ in rows) / n, 'vote_correct_all': sum(s == 1 for _, s, _, _ in rows) / n, 'thresholds': {}}
-    for th in (.25, .375, .5, .625, .75, .875):
-        sel = [s for c, s, _, _ in rows if c >= th]
-        out['thresholds'][th] = {'answered': len(sel), 'correct': sel.count(1), 'wrong': sel.count(-1), 'PA': round((sel.count(1) - sel.count(-1)) / n, 4)}
-    a.output.write_text(json.dumps(out, indent=2)); print(json.dumps(out))
-
-
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--data', type=Path, required=True); p.add_argument('--pred', type=Path); p.add_argument('--compare', type=Path)
+    p.add_argument('--data', type=Path, required=True); p.add_argument('--pred', type=Path, required=True); p.add_argument('--compare', type=Path)
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--businesses', nargs='+')
     p.add_argument('--questions', type=Path, help='Explicit benchmark questions JSONL; denominator is exactly this set')
-    p.add_argument('--trace', type=Path, help='predict.py trace.jsonl: sweep vote-share threshold')
-    p.add_argument('--k', type=int, help='with --trace: vote over the first k samples only')
     a = p.parse_args()
-    if a.trace: return sweep(a)
     questions = read_jsonl(a.data / 'questions.jsonl'); a.output.parent.mkdir(parents=True, exist_ok=True)
-    if not a.pred:
-        p.error('--pred required')
     gold = read_jsonl(a.data / 'answers.jsonl'); pred = read_jsonl(a.pred)
     if a.questions:
         selected = read_jsonl(a.questions)

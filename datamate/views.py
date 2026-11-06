@@ -3,7 +3,7 @@
 The model reads one shop's README + SCHEMA + RULEBOOK and writes ONE SELECT that maps the raw tables to fixed
 line-level columns. Generic SQL below casts them, lifts cancel/return flags to the whole order (rulebook: an order
 with any cancelled/returned line is excluded as a whole) and derives v_sales / v_orders (valid only) plus *_all
-variants. All samples are executed; the most common result fingerprint wins (execution-based self-consistency).
+variants. All samples are executed. The most common result fingerprint wins (execution-based self-consistency).
 """
 import re
 import threading
@@ -38,55 +38,9 @@ COLS = """CAST(order_id AS VARCHAR) AS order_id, CAST(order_date AS DATE) AS ord
 REV = "line_kind IN ('item', 'service')"
 
 
-QTY_SYSTEM = """You correct one column of a shop's canonical sales view, a DuckDB SELECT. qty must be the quantity of each line in the item's BASE UNIT (đơn vị cơ bản, the smallest unit the shop counts).
-Choose the first that applies, reading README and SCHEMA:
-1. The line table has a column already holding the converted quantity: use it.
-2. A conversion table or catalog gives a factor per item and unit: recorded quantity times the factor when the line is in the larger unit, times 1 when it is already in the base unit. Match on the item and on the line's unit.
-3. README writes the factors: use a CASE on item and unit.
-4. Every item has one unit: keep qty as it is.
-Change only qty, and joins it needs. Keep every other column, its name and every row: no join may add or drop lines. Use only tables and columns listed in SCHEMA, double-quoted.
-Think briefly, then answer with the whole SELECT in one ```sql``` block."""
-
-
-def qty_chat(rulebook, readme, schema, sql):
-    rules = "\n".join(line for line in rulebook.splitlines() if "đơn vị cơ bản" in line.lower())
-    return [{"role": "system", "content": QTY_SYSTEM}, {"role": "user", "content": f"RULEBOOK LINES ON UNITS:\n{rules}\n\nREADME:\n{readme}\n\nSCHEMA:\n{schema}\n\nCURRENT VIEW:\n```sql\n{sql}\n```"}]
-
-
-def _facts(db, sql):
-    return db.execute(f"SELECT COUNT(*), COUNT(DISTINCT order_id), SUM(TRY_CAST(amount AS DOUBLE)), COUNT(qty) FROM ({sql})").fetchone()
-
-
-def qty_check(db, old, new):
-    """None when the new view keeps the lines, orders and revenue of the old one and only raises qty; otherwise the problem, for the repair turn."""
-    try:
-        a, b = _facts(db, old), _facts(db, new)
-    except Exception as e:
-        return f"the query fails: {str(e)[:300]}"
-    if a[0] != b[0]:
-        return f"the view has {b[0]} rows, the current view has {a[0]}: a join adds or drops lines"
-    if a[1] != b[1]:
-        return f"the view has {b[1]} orders, the current view has {a[1]}"
-    if abs((a[2] or 0) - (b[2] or 0)) > 0.5:
-        return f"total amount changed from {a[2]} to {b[2]}: keep amount as it is"
-    if a[3] and b[3] < 0.99 * a[3]:
-        return f"qty is NULL on {a[3] - b[3]} more lines than before: lines with no factor keep the recorded quantity"
-    if a[3]:
-        low = db.execute(f"SELECT COUNT(*) FROM (SELECT SUM(TRY_CAST(qty AS DOUBLE)) AS q, order_id, product_name FROM ({old}) GROUP BY 2, 3) o JOIN (SELECT SUM(TRY_CAST(qty AS DOUBLE)) AS q, order_id, product_name FROM ({new}) GROUP BY 2, 3) n USING (order_id, product_name) WHERE n.q < o.q - 1e-6").fetchone()[0]
-        if low > 0.01 * a[0]:
-            return f"qty fell on {low} order lines: a base-unit quantity is never below the recorded one"
-        moved, items, ex = base_lines_moved(db, old, new)
-        if items and moved > 0.2 * items:
-            return f"on {moved} of {items} items sold in several units the quantity of the smallest unit changed, for example {ex}: lines already in the base unit keep the recorded quantity, and do not add columns that hold the same quantity"
-    spread, items, ex = unit_spread(db, new)
-    if spread and items >= 2 and spread > 2:
-        return f"price per qty differs by {spread:.1f} times between units of the same item over {items} items, worst {ex}: qty is not yet in one base unit. Compare unit text ignoring case and spaces, and convert every larger unit"
-    return None
-
-
 def unit_spread(db, sql):
     """(median over items sold in 2+ units of highest / lowest price per qty, number of such items, the worst item). With qty in one base unit an item's price per qty is
-    about the same on every unit; a large spread means some lines were not converted."""
+    about the same on every unit. A large spread means some lines were not converted."""
     rows = db.execute(f"""WITH t AS (SELECT product_name p, lower(trim(unit)) u, SUM(TRY_CAST(amount AS DOUBLE)) / NULLIF(SUM(TRY_CAST(qty AS DOUBLE)), 0) price FROM ({sql})
         WHERE TRY_CAST(qty AS DOUBLE) > 0 AND TRY_CAST(amount AS DOUBLE) > 0 AND product_name IS NOT NULL AND unit IS NOT NULL GROUP BY 1, 2 HAVING COUNT(*) >= 3)
         SELECT p, MAX(price) / MIN(price) r FROM t WHERE price > 0 GROUP BY p HAVING COUNT(*) >= 2 ORDER BY r""").fetchall()
@@ -97,7 +51,7 @@ def unit_spread(db, sql):
 
 def mixed_price_items(db, table):
     """Items whose price per qty differs over 3x between their own item lines (5th vs 95th percentile, 20+ priced lines). In one
-    base unit an item's price per qty is about constant; a gap the size of a unit factor means lines in the larger unit were not
+    base unit an item's price per qty is about constant. A gap the size of a unit factor means lines in the larger unit were not
     converted, or lines already in the base unit were multiplied again. Unlike unit_spread it needs no unit column."""
     return [p for (p,) in db.execute(f"""SELECT product_name FROM (SELECT product_name, TRY_CAST(amount AS DOUBLE) / TRY_CAST(qty AS DOUBLE) x FROM {table}
         WHERE line_kind = 'item' AND TRY_CAST(qty AS DOUBLE) > 0 AND TRY_CAST(amount AS DOUBLE) > 0 AND product_name IS NOT NULL)
@@ -113,21 +67,6 @@ def qty_test(db, prefix):
                          "keep lines already in the base unit as recorded")
 
 
-def base_lines_moved(db, old, new):
-    """Items sold in 2+ units whose smallest-unit lines changed quantity, as (count of such items, of all, an example): lines already in the base unit keep the recorded quantity."""
-    q = lambda s: f"SELECT product_name p, lower(trim(unit)) u, SUM(TRY_CAST(qty AS DOUBLE)) q FROM ({s}) WHERE TRY_CAST(qty AS DOUBLE) > 0 AND unit IS NOT NULL GROUP BY 1, 2"
-    rows = db.execute(f"""WITH j AS (SELECT o.p, o.u, n.q / o.q r FROM ({q(old)}) o JOIN ({q(new)}) n ON o.p = n.p AND o.u = n.u)
-        SELECT p, MIN(r) m FROM j GROUP BY p HAVING COUNT(*) >= 2""").fetchall()
-    bad = [p for p, m in rows if abs(m - 1) > 0.01]
-    return len(bad), len(rows), (bad[0] if bad else None)
-
-
-def qty_report(db, old, new):
-    a = db.execute(f"SELECT SUM(TRY_CAST(qty AS DOUBLE)), COUNT(qty) FROM ({old})").fetchone()
-    b = db.execute(f"SELECT SUM(TRY_CAST(qty AS DOUBLE)), COUNT(qty) FROM ({new})").fetchone()
-    return f"qty total {a[0]} -> {b[0]}, non-null {a[1]} -> {b[1]}"
-
-
 def parse_select(text):
     text = text.split("</think>")[-1]
     s = re.findall(r"```(?:sql)?\s*(.*?)```", text, re.S)
@@ -138,7 +77,7 @@ def parse_select(text):
 
 
 def build(db, sql, prefix="v_"):
-    """Materialize the four tables from the model's SELECT; return a fingerprint, raise if unusable."""
+    """Materialize the four tables from the model's SELECT. Return a fingerprint, raise if unusable."""
     db.execute(f"""CREATE OR REPLACE TABLE {prefix}sales_all AS
         WITH src AS ({sql}), t0 AS (SELECT {COLS} FROM src),
         -- rulebook: one customer = one customer code, else one name up to spelling (case, accents, spaces, punctuation)
@@ -368,7 +307,7 @@ def pick(db, checked):
 
 def hide_raw(db, meta, sql):
     """(meta without the raw sales tables the views map, one line naming their columns): samples that read those tables skip every status, unit and name rule the views apply.
-    Lookup tables stay; a table the mapping reads counts as raw sales when it holds at least a fifth as many rows as the sales lines."""
+    Lookup tables stay. A table the mapping reads counts as raw sales when it holds at least a fifth as many rows as the sales lines."""
     lines = db.execute("SELECT count(*) FROM v_sales_all").fetchone()[0]
     used = {x.lower() for x in re.findall(r'(?i)\b(?:from|join)\s+"?(\w+)"?', sql)}
     raw = [t for t in meta["tables"] if t["name"].lower() in used and t["name"] != "calendar" and not t["name"].startswith("v_") and t["rows"] >= 0.2 * lines]

@@ -1,6 +1,6 @@
 import pytest
 
-from datamate.scoring import penalized_accuracy, score_one
+from datamate.scoring import penalized_accuracy, score
 
 STR = {"type": "string", "answer": "Sting dâu 330ml", "alias": ["SP0042"]}
 LIST = {"type": "list", "answer": ["Cà phê sữa (M)", "Bạc xỉu"], "alias": [["SP0003"], ["SP0017"]]}
@@ -40,8 +40,8 @@ TABLE = {"type": "table", "answer": {"columns": ["khach_hang", "so_tien_no"],
     ({"type": "number", "answer": 0}, {"type": "unanswerable", "answer": None}, -1),
     ({"type": "unanswerable"}, {"type": "number", "answer": 5}, -1),
 ])
-def test_score_one(pred, ref, want):
-    assert score_one(pred, ref) == want
+def test_score(pred, ref, want):
+    assert score(pred, ref) == want
 
 
 def test_gold_scores_perfect_on_train(train_answers):

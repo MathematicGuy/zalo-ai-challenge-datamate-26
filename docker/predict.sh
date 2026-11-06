@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Container entry point: one datamate.predict process per GPU (data parallel over shops), every view and debt layer drafted
-# fresh, then one /result/submission.jsonl (+ /result/logs/). Each process stops at TIMEOUT_SECONDS; answers written so far count.
+# fresh, then one /result/submission.jsonl (+ /result/logs/). Each process stops at TIMEOUT_SECONDS. Answers written so far count.
 set -uo pipefail
 cd "$(dirname "$0")"
 source ./flags.sh

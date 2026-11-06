@@ -1,10 +1,10 @@
-"""Few-shot bank from a labeled run: python analysis/build_fewshot_bank.py RUN [RUN ...] --out assets/fewshot_bank.jsonl
+"""Few-shot bank from a labeled run: python training/build_fewshot_bank.py RUN [RUN ...] --out assets/fewshot_bank.jsonl
 For each question one reply whose answer matches gold and whose SQL reads only the canonical views (the shortest, up to 900 characters)."""
 import argparse, json, sys
 from collections import Counter
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
+sys.path.insert(0, str(R))
 from datamate import fewshot
 from datamate.scoring import score
 from datamate.sqlexec import parse

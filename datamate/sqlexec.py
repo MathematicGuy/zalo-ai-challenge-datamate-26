@@ -6,6 +6,7 @@ import threading
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 
+from .hints import DEBT_WORDS
 from .ingest import norm
 
 DEBT_CALL = re.compile(r"debt_(at|new|repaid)\s*\(")
@@ -62,7 +63,7 @@ def to_answer(kind, names, rows):
             out = rows[0]
         else:
             raise ValueError(f"list needs one column, got {names}")
-        if any(x is None for x in out):  # a filter matched nothing; the shape message made the repair reshape it (holdout: 50 -> 17 samples)
+        if any(x is None for x in out):  # a filter matched nothing. The shape message made the repair reshape it (holdout: 50 -> 17 samples)
             raise ValueError("a list item is NULL (check filters/values)")
         if any(isinstance(x, (bool, list, dict)) for x in out):  # the format check rejects such a list
             raise ValueError("every list item must be one name or number (one row per item, one column)")
@@ -75,8 +76,8 @@ def to_answer(kind, names, rows):
     if kind in ("number", "percent"):
         if isinstance(v, bool) or not isinstance(v, (int, float)):
             raise ValueError("expected a number")
-        # rulebook: money (incl. money averages) rounds to whole đồng, half up; other averages to 2 decimals.
-        # shortcut: |v| >= 1000 taken as VND money; a non-money average that large would be wrongly rounded.
+        # rulebook: money (incl. money averages) rounds to whole đồng, half up. Other averages to 2 decimals.
+        # shortcut: |v| >= 1000 taken as VND money. A non-money average that large would be wrongly rounded.
         v = float(Decimal(str(v)).quantize(Decimal("1" if kind == "number" and abs(v) >= 1000 else ".01"), rounding=ROUND_HALF_UP))
         return int(v) if v.is_integer() else v
     if kind == "boolean":
@@ -93,7 +94,6 @@ CHANGE = re.compile(r"(?:^|_)(?:tang|giam(?!_(?:dau|gia|can|beo|mo|sot))|thay_do
 
 
 GROSS = re.compile(r"(?:^|_)(?:lai_gop|loi_nhuan_gop|lai_go)(?:_|$)")
-DEBT_ASK = re.compile(r"(?:^|_)(?:no|cong_no|mua_chiu|ghi_no)(?:_|$)")  # the SFT builder's debt test: nợ, công nợ, mua chịu, ghi nợ
 
 
 def has_debt_layer(db):
@@ -113,16 +113,16 @@ def execute(db, text, question=""):
         raise ValueError("need one read-only SELECT query in ```sql```")
     sql = re.sub(r'"(%[^"]*)"', r"'\1'", sql)  # a double-quoted strftime format is a string, never a column
     if kind == "percent" and CHANGE.search(norm(question)) and "-" not in re.sub(r"'[^']*'", "", sql):
-        # 14B often writes 100*new/old after planning 100*(new-old)/old; lint it into the repair turn
+        # 14B often writes 100*new/old after planning 100*(new-old)/old. Lint it into the repair turn
         raise ValueError("a change in % is ROUND(100.0 * (new - old) / old, 2), negative when it fell; this query has no subtraction")
-    if DEBT_ASK.search(norm(question)) and not DEBT_CALL.search(sql) and has_debt_layer(db):
+    if DEBT_WORDS.search(norm(question)) and not DEBT_CALL.search(sql) and has_debt_layer(db):
         # train, shops with a debt layer: macro samples 740/816 right, raw-table samples 21/504, no question only a raw sample solved
         raise ValueError("this shop has the debt layer: answer a debt question with its macros, debt_at(DATE 'X') for what is owed at the end of a day, "
                          "debt_new(DATE 'A', DATE 'B') for new debt and debt_repaid(DATE 'A', DATE 'B') for repayments in a period (see DEBTS), not from the raw tables")
     names, rows = run_sql(db, sql.rstrip(";"))
     ans = to_answer(kind, names, rows)
     if kind == "string" and (m := re.fullmatch(r"(?i)\s*th[aá]ng\s*(\d{1,2})\s*[/-]\s*(\d{4})\s*", ans)) and 1 <= int(m[1]) <= 12:
-        ans = f"{m[2]}-{int(m[1]):02d}"  # 'tháng 3/2025' and '2025-03' split the vote on public 'tháng nào' questions; gold is YYYY-MM
+        ans = f"{m[2]}-{int(m[1]):02d}"  # 'tháng 3/2025' and '2025-03' split the vote on public 'tháng nào' questions. Gold is YYYY-MM
     if kind == "string" and re.fullmatch(r"\d{4}-\d{2}(-\d{2})?", ans):  # a day/month answer is type date
         kind = "date"
     if kind == "number" and isinstance(ans, (int, float)) and ans < 0 and GROSS.search(norm(question)):  # train: 0 of 7 negative gross-profit samples right

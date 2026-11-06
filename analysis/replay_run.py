@@ -1,5 +1,5 @@
 """Replay a saved run without the model: rebuild every question's user message from the data and the run's saved views/debt
-layers, and re-vote its samples; report where either differs from the trace. A code change that should not change behaviour
+layers, and re-vote its samples. Report where either differs from the trace. A code change that should not change behaviour
 must replay with 0 differences.
 
     python analysis/replay_run.py RUN [RUN ...] --data data/public_test --layers DIR [DIR ...] [predict flags]

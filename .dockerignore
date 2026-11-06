@@ -1,6 +1,9 @@
-# Allow-list: the image gets the code, the base model, the adapter and the example bank, never the competition data or run outputs.
+# Allow-list: the image gets the inference and training code, the README, the base model, the adapter and the example bank, never the competition data or run outputs.
 *
 !datamate/*.py
+!training
+training/**/__pycache__
+!README.md
 !assets/fewshot_bank.jsonl
 !scripts/flags.sh
 !docker/predict.sh

@@ -57,7 +57,7 @@ def problem(row: dict) -> str | None:
 
 
 def check(submission: Path, questions: Path) -> list[str]:
-    """Print the tally of a submission file; return its errors (an empty list means it can be uploaded)."""
+    """Print the tally of a submission file. Return its errors (an empty list means it can be uploaded)."""
     ids = [json.loads(line)["id"] for line in questions.open(encoding="utf-8-sig") if line.strip()]
     known, seen, errors, types = set(ids), Counter(), [], Counter()
     for n, line in enumerate(submission.open(encoding="utf-8"), 1):
@@ -83,7 +83,7 @@ def check(submission: Path, questions: Path) -> list[str]:
 
 
 def merge_shards(out: Path, questions: Path) -> int:
-    """One submission from the shard dirs of a multi-GPU run (out/shard<i>/), every question id in order; logs copied to out/logs."""
+    """One submission from the shard dirs of a multi-GPU run (out/shard<i>/), every question id in order. Logs copied to out/logs."""
     import shutil
     got = {}
     (out / "logs").mkdir(parents=True, exist_ok=True)

@@ -5,8 +5,8 @@
 
 Each line of the data files: {"system", "user", "reply", "thinking"} (training/build_sft.py). The prompt is rendered with the
 model's own chat template, as datamate.predict sends it to vLLM, so the adapter learns the continuation inference asks for.
-A row's own "thinking" flag picks the thinking template; --no-thinking sets the default for rows without one.
-Checkpoints go to --out every --save-steps steps; --resume continues from the newest one (sessions with a time limit, e.g. Kaggle).
+A row's own "thinking" flag picks the thinking template. --no-thinking sets the default for rows without one.
+Checkpoints go to --out every --save-steps steps. --resume continues from the newest one (sessions with a time limit, e.g. Kaggle).
 bf16 where the GPU has it (Ampere and newer), else fp16. notebooks/05_train_lora.ipynb drives this script.
 """
 from __future__ import annotations
@@ -45,7 +45,7 @@ def load_rows(paths: list[Path], max_len: int, tokenizer, thinking: bool = True,
 
 class CompletionLogitsTrainer(Trainer):
     """The same loss, with the LM head run only on the positions that predict reply tokens (logits_to_keep and the matching label
-    slice; the model shifts labels inside). The prompt is ~97% of each row, and Unsloth's fused CE otherwise runs the 248k-vocab head
+    slice, the model shifts labels inside). The prompt is ~97% of each row, and Unsloth's fused CE otherwise runs the 248k-vocab head
     and a float32 softmax on every prompt position before masking them."""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):

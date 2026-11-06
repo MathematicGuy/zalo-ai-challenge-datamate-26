@@ -64,7 +64,7 @@ HMS = r"(?:[ T,]+(?P<hour>\d{1,2})[:h](?P<minute>\d{2})(?::(?P<second>\d{2}))?(?
 
 
 def to_dates(t, year=None):
-    """Vectorized dd/mm/yyyy, yyyy-mm-dd, 'd thg m yyyy', d/m (+ sheet/file year), Excel serial; else NaT."""
+    """Vectorized dd/mm/yyyy, yyyy-mm-dd, 'd thg m yyyy', d/m (+ sheet/file year), Excel serial, else NaT."""
     out = pd.Series(pd.NaT, index=t.index, dtype="datetime64[ns]")
     for pat in (DMY + HMS, YMD + HMS, THG + HMS) + ((DM + HMS,) if year else ()):
         p = t.str.extract(pat, flags=re.IGNORECASE)
@@ -81,7 +81,7 @@ def to_dates(t, year=None):
 
 
 def to_number(t):
-    """'1.234.000', '1,234,000', '198 000', '55.000đ', '25k', '8tr600', '1,27tr' -> float; else NaN."""
+    """'1.234.000', '1,234,000', '198 000', '55.000đ', '25k', '8tr600', '1,27tr' -> float, else NaN."""
     clean = t.str.replace(r"\s*(?:₫|vnđ|vnd|đ|đồng)\s*$", "", regex=True, flags=re.IGNORECASE).str.replace(" ", " ")
     clean = clean.where(~clean.str.fullmatch(r"[+-]?\d{1,3}(?: \d{3})+").fillna(False), clean.str.replace(" ", "", regex=False))
     out = pd.Series(float("nan"), index=t.index)
@@ -155,7 +155,7 @@ def prepare(df, year=None):
         blank = df[ids[0]].isna()
         if blank.mean() > 0.05:
             group = [c for c in df.columns if df.loc[blank, c].isna().mean() > 0.95]
-            # fill continuation lines from their own order's first line only; a plain ffill would carry
+            # fill continuation lines from their own order's first line only. A plain ffill would carry
             # a sparse order-level cell (note "trả hàng", order discount) into later orders
             first = df[group].groupby((~blank).cumsum()).transform("first")
             df.loc[blank, group] = first.loc[blank]
@@ -237,7 +237,7 @@ def spelling_key(v):
 
 def spelling_map(counts):
     """{value: count} -> {value: spelling to use}, for names that differ only in the way they are written (rulebook: such
-    names are one customer, one item). Forms with different accents stay apart (Bò, Bơ); a form without accents joins only
+    names are one customer, one item). Forms with different accents stay apart (Bò, Bơ). A form without accents joins only
     when one accented form shares its key, since otherwise it could be either."""
     groups = defaultdict(list)
     for v, n in counts.items():

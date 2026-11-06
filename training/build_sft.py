@@ -1,16 +1,16 @@
 """SFT rows for LoRA v3 from labeled runs with --save-prompts: python training/build_sft.py RUN [RUN ...] --out data/sft/sql_rft_v3.jsonl [--fewshot BANK] [--max 2400] [--easy 300]
 What changes from v2: a question keeps only its solutions on the best route that reached the gold answer (debt macros, then canonical views, then raw tables), so raw SQL
-is taught only where nothing else worked; a thinking sample's final SQL also serves as a plain row when plain samples missed that route (plain samples never learned the macros);
-debt questions get up to 3 rows and survive the --max cut; --teacher runs (a bigger model on the questions the 9B never solved, 2 plain samples then thinking samples) feed rows the same way, also safe from the cut. Scorer: datamate.scoring.score_one, the one that matches the leaderboard's alias handling.
+is taught only where nothing else worked. A thinking sample's final SQL also serves as a plain row when plain samples missed that route (plain samples never learned the macros),
+debt questions get up to 3 rows and survive the --max cut. --teacher runs (a bigger model on the questions the 9B never solved, 2 plain samples then thinking samples) feed rows the same way, also safe from the cut. Scorer: datamate.scoring.score_one, the one that matches the leaderboard's alias handling.
 Plain rows: questions with 0-5 of 8 right samples give up to 2 solutions, questions with 6-8 right give --easy rows in all. Thinking rows: 1 per question, gold answer without a repair turn."""
 import argparse, json, random, re, sys
 from collections import Counter
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
+sys.path.insert(0, str(R))
 from datamate import prompts
 from datamate import fewshot
-from datamate.scoring import score_one
+from datamate.scoring import score
 from datamate.ingest import norm
 ap = argparse.ArgumentParser()
 ap.add_argument("runs", nargs="+", type=Path); ap.add_argument("--out", type=Path, required=True)
@@ -36,7 +36,7 @@ def row(t, reply, thinking=False):
         shots = fewshot.block(bank.retrieve(t["question"], t["business_id"], a.fewshot_k, debt="DEBTS (" in user))
         user = user.replace("\n\nQUESTION: ", "\n\n" + shots + "\n\nQUESTION: ", 1)
     return {"system": prompts.SYSTEM + "\n\nRULEBOOK:\n" + book(), "user": user, "reply": reply, "id": t["id"], "thinking": thinking, "route": route(reply.split("```sql")[-1])}
-right = lambda t, s: bool(s.get("pred")) and score_one({"id": t["id"], **s["pred"]}, gold[t["id"]]) == 1
+right = lambda t, s: bool(s.get("pred")) and score(s["pred"], gold[t["id"]]) == 1
 hard, easy, think, debt_rows, stats = [], [], [], [], Counter()
 for run, plain_k in [(x, 8) for x in a.runs] + [(x, 2) for x in a.teacher]:
     for t in map(json.loads, open(R / run / "trace.jsonl", encoding="utf-8")):
@@ -52,7 +52,7 @@ for run, plain_k in [(x, 8) for x in a.runs] + [(x, 2) for x in a.teacher]:
                 n += 1
                 parts = s["text"].split("\n#REPAIR\n")
                 reply = parts[-1].strip()
-                if len(parts) > 1 and parts[0].startswith("Notes:") and "Notes:" not in reply:  # a repair turn fixes the SQL; keep the notes of the first turn
+                if len(parts) > 1 and parts[0].startswith("Notes:") and "Notes:" not in reply:  # a repair turn fixes the SQL. Keep the notes of the first turn
                     reply = parts[0].split("TYPE:")[0].strip() + "\n" + reply
                 key = fewshot.skeleton(reply.split("```sql")[-1])
                 if key not in seen:

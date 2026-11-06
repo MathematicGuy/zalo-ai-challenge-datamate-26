@@ -1,7 +1,7 @@
 """Is the fla kernel (fla-core) a drop-in for the reference PyTorch gated delta rule that transformers falls back to when fla is missing?
 Qwen3.5-9B: 24 of its 32 layers are Gated DeltaNet, inputs [B, T, 32 heads, 128] after the k->v head repeat, g float32, beta bf16.
 Forward and backward on random inputs of that shape, both implementations, relative L2 error of the output and of every gradient.
-    .venv-train/bin/python train/check_fla.py [--T 4096]      -> last line "fla check PASS ..." or "fla check FAIL ..."
+    .venv-train/bin/python training/check_fla.py [--T 4096]      -> last line "fla check PASS ..." or "fla check FAIL ..."
 """
 import argparse
 import inspect

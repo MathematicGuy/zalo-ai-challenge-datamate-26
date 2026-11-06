@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datamate.scoring import score  # noqa: E402
 from datamate.ingest import norm  # noqa: E402
 
-GOLD = {r["id"]: r for r in map(json.loads, Path("data/train/answers.jsonl").read_text(encoding="utf-8").splitlines())}
+GOLD = {r["id"]: r for r in map(json.loads, (Path(__file__).resolve().parents[1] / "data/train/answers.jsonl").read_text(encoding="utf-8").splitlines())}
 TOPIC = [("debt", r"(?:^|_)(no|cong_no|ghi_no|tra_no|thu_no|con_no|tuoi_no)(?:_|$)"), ("stock", r"ton|het_hang|nhap"),
          ("status", r"huy|tra_hang|hoan|doi_tra"), ("customer", r"khach"), ("product", r"san_pham|mat_hang|ban_chay|mon|thuoc|sp(?:_|$)")]
 

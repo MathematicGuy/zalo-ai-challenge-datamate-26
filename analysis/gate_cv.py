@@ -1,4 +1,4 @@
-"""Answer-selection variants replayed offline on holdout traces (train gold only; no LLM).
+"""Answer-selection variants replayed offline on holdout traces (train gold only, no LLM).
 Usage: python analysis/gate_cv.py RUN
 Each variant re-votes the trace's samples with predict.vote / debt_pool and a decision rule. The threshold is also picked
 leave-one-shop-out (fit on 5 shops, score the 6th), so the reported CV PA is an honest held-out number."""

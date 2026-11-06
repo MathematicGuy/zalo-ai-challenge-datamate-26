@@ -11,13 +11,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
+sys.path.insert(0, str(R))
 from datamate import fewshot
-from datamate import values as harness
-from datamate import views as llmviews
+from datamate import values, views
 from datamate import sqlexec, voting  # noqa: E402
 from datamate.hints import period_hints  # noqa: E402
-from datamate.scoring import score_one
+from datamate.scoring import score
 from datamate.ingest import load_business, norm
 
 INTENTS = [("delivery", r"dot_hang|dot_giao|giao_hang|xe_cho|xe_da_giao|xe_giao"), ("debt", r"(^|_)no(_|$)|cong_no|mua_chiu|ghi_no"), ("lot/expiry", r"(^|_)lo(_|$)|het_han|han_dung"),
@@ -34,9 +33,9 @@ def shop_flags(db, meta, v, d, as_of):
     f = {"tables": len(meta["tables"]), "view_sql": bool(v.get("sql")), "view_offered": bool(v.get("sql")) and v.get("agree", 0) * 4 >= v.get("k", 8), "agree": v.get("agree"), "debt_layer": bool(d.get("used"))}
     if not v.get("sql"):
         return f
-    spread, items, _ = llmviews.unit_spread(db, v["sql"])
+    spread, items, _ = views.unit_spread(db, v["sql"])
     f.update(unit_spread=spread, multi_unit_items=items)
-    llmviews.build(db, v["sql"])
+    views.build(db, v["sql"])
     r = db.execute("""SELECT COUNT(*), AVG(CAST(customer_key IS NULL AS INT)), AVG(CAST(product_name IS NULL AS INT)), AVG(CAST(product_group IS NULL AS INT)), AVG(CAST(order_ts IS NULL AS INT)), AVG(CAST(qty IS NULL AS INT)),
         AVG(CAST(order_date > ? AS INT)), AVG(CAST(line_kind = 'service' AS INT)), AVG(CAST(line_kind = 'adjust' AS INT)) FROM v_sales_all""", [as_of]).fetchone()
     f.update(lines=r[0], null_customer=r[1], null_product=r[2], null_group=r[3], null_time=r[4], null_qty=r[5], lines_after_today=r[6], service_lines=r[7], adjust_lines=r[8])
@@ -63,7 +62,7 @@ def sample_flags(s, question, as_of, hints, known, view_offered):
     want = [m for h in hints for m in re.findall(r"\[(\d{4}-\d\d-\d\d), (\d{4}-\d\d-\d\d)\)", h)[:1]]
     if want:
         out["hint_followed"] = all(a_ in sql and (b_ in sql or _prev(b_) in sql) for a_, b_ in want)
-    miss = harness.missing_filters(sql, known)
+    miss = values.missing_filters(sql, known)
     out["missing_value"] = bool(miss)
     out["uses_qty"] = bool(re.search(r"(?i)\bqty\b", sql))
     return out
@@ -84,7 +83,7 @@ def _prev(x):
 def root(i, t, sf, shop, gold, res, voters, intent_):
     """The first stage that broke a question with a label."""
     g = gold[i]
-    S = lambda p: score_one({"id": i, **(p or {"type": "abstain"})}, g)
+    S = lambda p: score(p, g)
     if res == 1:
         return "OK"
     if t["final"].get("reason"):
@@ -144,7 +143,7 @@ def main():
         d = json.loads(df.read_text(encoding="utf-8")) if df.exists() else {}
         as_of = max(Q[t["id"]]["as_of_date"] for t in ts)
         shops[b] = shop_flags(db, meta, v, d, as_of)
-        known = harness.known_values(db)
+        known = values.known_values(db)
         for t in ts:
             i = t["id"]
             q = Q[i]
@@ -156,7 +155,7 @@ def main():
             final = t["final"] if t["final"].get("reason") else ans if voting.decide(ans, conf, .5) else {"type": "abstain"}
             r = {"id": i, "shop": b, "intent": intent(t["question"]), "hints": len(hints), "share": conf, "groups": len({voting.answer_key(s["pred"]) for s in voters if s["pred"]}), "final_type": final["type"], "top_type": ans.get("type"), "samples": sf}
             if a.labels:
-                res = score_one({"id": i, **final}, gold[i])
+                res = score(final, gold[i])
                 r["result"] = res
                 r["root"] = root(i, t, sf, shops[b], gold, res, voters, r["intent"])
             rows.append(r)

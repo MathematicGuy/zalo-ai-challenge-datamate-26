@@ -1,8 +1,8 @@
 """Merge a PEFT LoRA adapter into the bf16 base checkpoint, one tensor at a time (the dev box has 30 GB RAM
-for a 24 GB model). Writes a sharded safetensors checkpoint that vLLM loads like the original; serving the
+for a 24 GB model). Writes a sharded safetensors checkpoint that vLLM loads like the original. Serving the
 merged weights avoids vLLM's LoRA path and keeps the parameter count of the base model.
 
-    .venv-train/bin/python train/merge_lora.py runs/lora/r16/adapter models/gemma4-12b-datamate-r16
+    .venv-train/bin/python training/merge_lora.py adapters/sql_rft_v3 models/Qwen3.5-9B-sql_rft_v3
 """
 from __future__ import annotations
 

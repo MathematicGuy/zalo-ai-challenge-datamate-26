@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The submitted setup on the public test, outside Docker, one process per GPU; the file to upload is OUT/submission.jsonl.
+# The submitted setup on the public test, outside Docker, one process per GPU. The file to upload is OUT/submission.jsonl.
 #   bash scripts/run_public.sh [OUT]            reuses the views and debt layers of the 0.683 run (configs/public_v9)
 #   FRESH=1 bash scripts/run_public.sh [OUT]    drafts every layer again, as the private-test run in Docker does
 # PYTHON (default .venv/bin/python), NUM_GPUS, MODEL_DIR, LORA_DIR override the defaults. About 3.5 h on one 24 GB GPU.

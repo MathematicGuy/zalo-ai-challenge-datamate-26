@@ -8,12 +8,12 @@ from .sqlexec import DEBT_CALL, parse
 
 
 def top_votes(checked):
-    """Size of the largest group of drafts with one fingerprint ('none' included); 0 when no draft passed."""
+    """Size of the largest group of drafts with one fingerprint ('none' included). 0 when no draft passed."""
     return max(Counter(str(fp) for fp, _ in checked if fp).values(), default=0)
 
 
 def fold(v):
-    """Cell as the scorer compares it (evaluation.norm / key, which inference does not import): text by NFC lowercase words, numbers by value."""
+    """Cell as the scorer compares it (scoring.norm / key, which inference does not import): text by NFC lowercase words, numbers by value."""
     if isinstance(v, str):
         return " ".join("".join(c if c.isalnum() or c.isspace() else " " for c in unicodedata.normalize("NFC", v).lower()).split())
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
@@ -48,7 +48,7 @@ def debt_pool(texts, start, debt_q=False):
 
 
 def vote(preds, k):
-    """Majority over executed answers; confidence = share of all K samples agreeing. A number and a percent of the same
+    """Majority over executed answers. Confidence = share of all K samples agreeing. A number and a percent of the same
     value are one answer: Qwen3.5 labels a % change either way (public: 38 abstains were such a split), so the group
     takes its commoner label, percent on a tie, and that label's commonest value."""
     dump = lambda p: json.dumps(p, ensure_ascii=False, default=str, sort_keys=True)

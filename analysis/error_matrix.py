@@ -6,8 +6,8 @@ import argparse, json, math, re, sys, unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(R), str(R / "analysis")]
-from datamate.scoring import score_one, norm_answer
+sys.path.insert(0, str(R))
+from datamate.scoring import norm, score
 
 ap = argparse.ArgumentParser()
 ap.add_argument("runs", nargs="+", type=Path); ap.add_argument("--name", default="runs"); ap.add_argument("--plain-k", type=int, default=8)
@@ -80,7 +80,7 @@ def err_class(p, g):
     if gt == "list":
         if not isinstance(pv, list):
             return "list: not a list"
-        P = [norm_answer(x) for x in pv]; G = [norm_answer(x) for x in gv]
+        P = [norm(x) for x in pv]; G = [norm(x) for x in gv]
         if sorted(P) == sorted(G):
             return "list: order"
         if len(P) != len(G):
@@ -102,7 +102,7 @@ for run in a.runs:
     pk = a.plain_k
     for line in open(R / run / "trace.jsonl", encoding="utf-8"):
         t = json.loads(line); g = gold[t["id"]]
-        ok = lambda p: bool(p) and score_one({"id": t["id"], **p}, g) == 1
+        ok = lambda p: bool(p) and score(p, g) == 1
         S = []
         for j, s in enumerate(t["samples"]):
             p = s.get("pred")

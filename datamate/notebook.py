@@ -6,9 +6,9 @@ same notebook runs in a local checkout and on Kaggle.
     env.run([env.python, "-m", "datamate.predict", ...], log=env.runs / "x.log")
 
 Where things live:
-    local   repo checkout; data/, models/, runs/ inside it (DATAMATE_DATA / DATAMATE_MODELS / DATAMATE_RUNS override)
-    Kaggle  repo wherever it was cloned or attached; competition data found under /kaggle/input; base weights in /tmp/models
-            (too big for the saved output); runs in /kaggle/working/runs (kept after the session)
+    local   repo checkout with data/, models/, runs/ inside it (DATAMATE_DATA / DATAMATE_MODELS / DATAMATE_RUNS override)
+    Kaggle  repo wherever it was cloned or attached. Competition data found under /kaggle/input. Base weights in /tmp/models
+            (too big for the saved output). Runs in /kaggle/working/runs (kept after the session)
 """
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ class Env:
         if not g.bf16 or g.mem_gb < 22:
             raise RuntimeError(f"{g.name} ({g.mem_gb} GB, sm{g.capability[0]}{g.capability[1]}) cannot run this pipeline: it needs a bf16 GPU "
                                "(Ampere or newer) with >= 24 GB per process. T4 / P100 do not qualify; use them for the CPU notebooks only.")
-        if not g.fp8:  # Ampere: no fp8 weights or KV cache in vLLM; bf16 weights, auto KV cache, a shorter context to fit
+        if not g.fp8:  # Ampere: no fp8 weights or KV cache in vLLM. bf16 weights, auto KV cache, a shorter context to fit
             flags = _drop(flags, "--quant")
             flags = _set(flags, "--context", "32768" if g.mem_gb >= 40 else "16384")
             engine = engine.replace('"kv_cache_dtype":"fp8",', "")
@@ -101,7 +101,7 @@ class Env:
 
     # ---- running steps --------------------------------------------------------------------------------------------
     def run(self, cmd, log: Path | None = None, env: dict | None = None, show: str | None = None, every: float = 30.0):
-        """Run one pipeline step as a subprocess from the repo root. All output goes to `log`; the notebook shows the lines
+        """Run one pipeline step as a subprocess from the repo root. All output goes to `log`. The notebook shows the lines
         matching `show` (a substring list separated by '|', default: progress and errors) and a heartbeat every `every` s."""
         cmd = [str(c) for c in cmd]
         log = Path(log) if log else None
@@ -126,7 +126,7 @@ class Env:
         print(f"done in {time.time() - t0:.0f}s" + (f"; log: {log}" if log else ""), flush=True)
 
     def run_shards(self, make_cmd, n: int, out: Path, show: str | None = None, every: float = 60.0):
-        """n processes at once, process i on GPU i (CUDA_VISIBLE_DEVICES=i), command make_cmd(i), output in out/shard<i>.log;
+        """n processes at once, process i on GPU i (CUDA_VISIBLE_DEVICES=i), command make_cmd(i), output in out/shard<i>.log,
         the notebook shows their progress lines as they come."""
         keys = (show or "Traceback|Error|model ready|views of|[views]|[debts]| answered,|merged").split("|")
         out.mkdir(parents=True, exist_ok=True)
@@ -176,13 +176,13 @@ class Env:
 
 def install(kind: str = "base"):
     """Kaggle only (a local checkout has its own venvs): pip install what a notebook needs.
-    base: the package (EDA, evaluation); llm: + vLLM (inference, notes); train: the training stack (Unsloth, fla) without vLLM."""
+    base: the package (EDA, evaluation), llm: + vLLM (inference, notes), train: the training stack (Unsloth, fla) without vLLM."""
     if not ON_KAGGLE:
         return
     pip = [sys.executable, "-m", "pip", "install", "-q"]
     if kind == "train":
         subprocess.run(pip + ["-r", str(REPO / "training/requirements.txt")], check=True)
-        subprocess.run(pip + ["--no-deps", "fla-core==0.6.0"], check=True)   # Gated DeltaNet kernels; without them training falls back to a ~90x slower path
+        subprocess.run(pip + ["--no-deps", "fla-core==0.6.0"], check=True)   # Gated DeltaNet kernels. Without them training falls back to a ~90x slower path
     else:
         subprocess.run(pip + ["-e", f"{REPO}[{'llm,dev' if kind == 'llm' else 'dev'}]"], check=True)
 
@@ -204,7 +204,7 @@ def _set(flags, name, value):
 
 
 def setup(verbose: bool = True) -> Env:
-    """Paths, GPUs and the repo on sys.path; prints what was found."""
+    """Paths, GPUs and the repo on sys.path. Prints what was found."""
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
     runs = Path(os.environ.get("DATAMATE_RUNS") or ("/kaggle/working/runs" if ON_KAGGLE else REPO / "runs"))

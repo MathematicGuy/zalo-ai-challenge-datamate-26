@@ -3,10 +3,10 @@
     questions -> shops (loaded into DuckDB while the model starts)
               -> per shop, once: canonical sales views (views.py) and a debt layer (debts.py), drafted by the model and tested
                  on the data, or reused from a saved run (--views-from)
-              -> per question: K plain SQL samples over two prompts, executed, failed ones repaired; thinking samples for
-                 low-agreement and debt questions; majority vote; answer or abstain (voting.py)
+              -> per question: K plain SQL samples over two prompts, executed, failed ones repaired. Thinking samples for
+                 low-agreement and debt questions. Majority vote, answer or abstain (voting.py)
 
-Pipeline holds the run's settings and state; each stage is one method, so a stage can run without the model (setup_shop and
+Pipeline holds the run's settings and state. Each stage is one method, so a stage can run without the model (setup_shop and
 build_chats only read the data, which is how tests/replays rebuild the exact prompts of a saved run).
 """
 import json
@@ -88,7 +88,7 @@ class Pipeline:
             self.dfixed = {b: json.loads(f.read_text(encoding="utf-8")) for b in loaded if (f := a.views_from / "logs" / f"_debt_{b}.json").exists()}
 
     def draft_views(self, loaded, t0):
-        """Per shop: a.k drafts of one mapping SELECT, data tests, up to 2 repairs; a second set when there is no majority."""
+        """Per shop: a.k drafts of one mapping SELECT, data tests, up to 2 repairs. A second set when there is no majority."""
         a, eng = self.a, self.engine
         drafted = [b for b in loaded if b not in self.vfixed]  # shops without reused views get fresh drafts
         if a.views != "llm" or not drafted:
@@ -171,7 +171,7 @@ class Pipeline:
         if b in vtexts:
             # drafts behind the pick: a saved layer keeps no drafts, so its own count (prompts of the 0.683 run said "7/0" there)
             nk = len(vtexts[b]) or (vfixed[b].get("k") if b in vfixed else 0) or a.k
-            if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess; better no view than a wrong one (counted against one set of a.k drafts)
+            if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess. Better no view than a wrong one (counted against one set of a.k drafts)
                 view = views.describe(db, sql, nv, nk)
                 meta["tables"] += [profile(db, v, "canonical view") for v in ("v_sales", "v_orders")]
             vinfo = {"agree": nv, "k": nk, "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
@@ -193,14 +193,14 @@ class Pipeline:
                                                                              "errors": [e for fp, e in dchecked.get(b, []) if fp is None]}, ensure_ascii=False, indent=1), encoding="utf-8")
             print(f"[debts] {b}: {dn}/{dk} agree, used={bool(debt)}", flush=True)
         shown, raw_note = meta, ""
-        if a.hide_raw and view:  # the views become the interface; the mapping SQL would only point back at the raw tables
+        if a.hide_raw and view:  # the views become the interface. The mapping SQL would only point back at the raw tables
             shown, raw_note = views.hide_raw(db, meta, sql)
             view = view.split("\nBuilt from the raw tables")[0]
         ctx = "README:\n" + meta["readme"] + "\n\nSCHEMA:\n" + schema_text(shown) + raw_note + ("\n\nCANONICAL VIEWS:\n" + view if view else "") + ("\n\n" + debt if debt else "")
         return Shop(b, db, meta, shown, view, debt, ctx, vinfo)
 
     def build_chats(self, shop, todo):
-        """Per question: values matching it, its hints, whether its period lies outside the data; then one chat per prompt."""
+        """Per question: values matching it, its hints, whether its period lies outside the data. Then one chat per prompt."""
         a, bank = self.a, self.bank
         for q in todo:
             q["_hits"] = entity_hits(shop.db, shop.shown, q["question"])
@@ -237,7 +237,7 @@ class Pipeline:
         return turns
 
     def sample(self, shop, todo, chats, is_behind):
-        """Plain samples (half per prompt), executed; TYPE fills and repairs; thinking samples for hard and debt questions.
+        """Plain samples (half per prompt), executed. TYPE fills and repairs. Thinking samples for hard and debt questions.
         is_behind() is asked after the plain samples: a run behind its --deadline pace skips the thinking samples."""
         a, eng, half, systems, bank = self.a, self.engine, self.half, self.systems, self.bank
         budget = a.context - a.max_tokens - 64
@@ -250,7 +250,7 @@ class Pipeline:
         it = iter(outs)
         texts = [[(NOTES if a.notes else "") + o.text for _ in systems for o in next(it).outputs] if f else [] for f in fits]
 
-        # Execute; failed samples get greedy repair turns with the error message.
+        # Execute. Failed samples get greedy repair turns with the error message.
         preds = [[None] * len(t) for t in texts]
         errs, repair = [[None] * len(t) for t in texts], []
         for i, ts in enumerate(texts):
@@ -286,14 +286,14 @@ class Pipeline:
                                  thinking=True, lora=a.lora_thinking)
                 for n, o in enumerate(houts):
                     i, t = hard[n // a.think_k], o.outputs[0].text
-                    if "<think>" not in t:  # Qwen3.5's template opens <think> in the prompt; parse() keys on it to spot a cut-off thought
+                    if "<think>" not in t:  # Qwen3.5's template opens <think> in the prompt and parse() keys on it to spot a cut-off thought
                         t = "<think>\n" + t
                     texts[i].append(t)
                     try:
                         preds[i].append(execute(shop.db, t, todo[i]["question"])); errs[i].append(None)
                     except Exception as e:
                         preds[i].append(None); errs[i].append(str(e)[:400])
-                # failed thinking samples get the same repair turns (non-thinking); a cut-off thought has no query to fix
+                # failed thinking samples get the same repair turns (non-thinking). A cut-off thought has no query to fix
                 n_repair += self._repair(shop, todo, chats, texts, preds, errs,
                                          [(i, j) for i in hard for j in range(2 * half, len(texts[i])) if preds[i][j] is None and "</think>" in texts[i][j]], prompt_idx)
         pools = [debt_pool(ts, 2 * half, dq) if a.debt_route else list(range(len(ts))) for ts, dq in zip(texts, debt_q)]
@@ -348,5 +348,5 @@ class Pipeline:
 
 
 def run_in_background(fn, *args):
-    """Start fn(*args) in a thread (shop loading overlaps the model start); returns a future."""
+    """Start fn(*args) in a thread (shop loading overlaps the model start). Returns a future."""
     return ThreadPoolExecutor(1).submit(fn, *args)

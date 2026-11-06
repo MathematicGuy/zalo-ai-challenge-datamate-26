@@ -36,8 +36,8 @@ def period_hints(question, as_of, db=None):
         if 1 <= m <= 12:
             y = (int(y) + (2000 if len(y) == 2 else 0)) if y else year_of(m)
             out.append(f"tháng {m}/{y} = [{first(y, m)}, {first(y, m + 1)})")
-    # a month written with no word and no day: 03/2026, 1-2026, 8/26 (rulebook "Tháng M/Y"; public: 153 questions had no
-    # hint). A 2-digit year must be near today, so 5/12 (a day/month) is left alone; quý 2/2026 is a quarter.
+    # a month written with no word and no day: 03/2026, 1-2026, 8/26 (rulebook "Tháng M/Y". Public: 153 questions had no
+    # hint). A 2-digit year must be near today, so 5/12 (a day/month) is left alone. Quý 2/2026 is a quarter.
     for mt in re.finditer(r"(?<![\d/.-])(\d{1,2}) ?[/-] ?(20\d\d|\d\d)(?![\d/.-])", question):
         if re.search(r"(?i)(?:^|\W)(?:qu[yý]|q|th[aá]ng|thg|th|t)\s*$", question[:mt.start()]):
             continue
@@ -74,7 +74,7 @@ def period_hints(question, as_of, db=None):
             x = date(int(yy), int(mm), int(dd)); out.append(f"ngày {x} = [{x}, {x + timedelta(days=1)})"); days.append(x)
         except ValueError:
             pass
-    # rulebook 'Hiệu ứng tăng giá': N days from D (D included) against the N days right before D; samples miscount these bounds
+    # rulebook 'Hiệu ứng tăng giá': N days from D (D included) against the N days right before D. Samples miscount these bounds
     k = re.search(r"(?:^|_)(\d{1,3})_ngay_ke_tu(?=_|$)", t)
     if k and len(set(days)) == 1:
         n, x = int(k.group(1)), days[0]
@@ -112,7 +112,7 @@ def lot_hint(question, meta):
 
 def grain_hints(question):
     """Question shapes the samples misread: 'mấy ngày bán được từ X trở lên' counts days by their daily total (public samples
-    counted orders >= X); 'từ khi X lên giá P, N ngày đầu ...' names no date, so D has to come from the price table
+    counted orders >= X). 'từ khi X lên giá P, N ngày đầu ...' names no date, so D has to come from the price table
     (public: all 3 such questions abstained, samples guessed D differently)."""
     t, out = norm(question), []
     if COUNT_DAYS.search(t) and THRESHOLD.search(t + question):

@@ -1,6 +1,6 @@
 """Few-shot generator: for each question, the most similar train questions with an SQL that ran to the gold answer and only
 reads the canonical views, so it carries over to any shop. Retrieval is IDF-weighted overlap of words and character trigrams on
-the question with accents dropped and digits masked; no extra model. Examples come from other shops only."""
+the question with accents dropped and digits masked, no extra model. Examples come from other shops only."""
 import json
 import math
 import re
@@ -38,7 +38,7 @@ class Bank:
         self.norm = [math.sqrt(sum((c * self.idf[k]) ** 2 for k, c in f.items())) for f in self.f]
 
     def retrieve(self, question, business, k=4, debt=False):
-        """Top k rows by cosine, other shops only, no two with the same SQL shape; debt examples only where the shop has the debt tables."""
+        """Top k rows by cosine, other shops only, no two with the same SQL shape. Debt examples only where the shop has the debt tables."""
         f = feats(question)
         nq = math.sqrt(sum((c * self.idf.get(x, 1.0)) ** 2 for x, c in f.items())) or 1.0
         scored = []
