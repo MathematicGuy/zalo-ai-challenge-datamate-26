@@ -1,171 +1,158 @@
 # DataMate — Zalo AI Challenge 2026
 
-Trả lời câu hỏi tiếng Việt trên dữ liệu bán hàng lộn xộn của từng shop, hoặc bỏ trống nếu không chắc. Chấm theo Penalized Accuracy: đúng +1, bỏ trống 0, sai −1.
+Trả lời câu hỏi tiếng Việt trên dữ liệu bán hàng lộn xộn của từng shop (csv / xlsx / sqlite), hoặc bỏ trống khi không chắc.
+Chấm theo Penalized Accuracy: đúng +1, bỏ trống 0, sai −1.
 
-Pipeline hiện tại nằm trong `sqlbase/`: Qwen3.5-9B kèm LoRA tự train viết nhiều câu SQL cho mỗi câu hỏi, chạy trên DuckDB rồi bỏ phiếu. Chi tiết ở [sqlbase/README.md](sqlbase/README.md).
+Cách làm: Qwen3.5-9B kèm một LoRA tự train viết nhiều câu SQL DuckDB cho mỗi câu hỏi, chạy chúng trên dữ liệu đã nạp, bỏ phiếu
+theo kết quả, và chỉ trả lời khi đủ đồng thuận.
 
-Repo này chỉ dành cho thành viên trong đội. Quy chế §4.3 và §8.2 cấm chia sẻ code và dữ liệu ra ngoài đội.
-
-## Chạy nhanh
-
-Cần: GPU từ 24 GB (đã chạy trên 1 RTX PRO 4000 Blackwell 24 GB, RAM 30 GB), Python 3.12, `git-lfs`, khoảng 30 GB đĩa.
-
-```bash
-# 1. Lấy code và LoRA (LoRA nằm trong Git LFS)
-git clone git@github.com:hugebenevolence/zalo-ai-challenge-datamate-26.git
-cd zalo-ai-challenge-datamate-26
-git lfs install && git lfs pull
-
-# 2. Cài thư viện
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r sqlbase/requirements.txt
-
-# 3. Tải model gốc, khoảng 19 GB
-hf download Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a --local-dir sqlbase/models/Qwen3.5-9B
-
-# 4. Đặt dữ liệu của BTC vào data/ (không có trong repo)
-#    data/public_test/{questions.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
-#    data/train/{questions.jsonl,answers.jsonl,rulebook.md,calendar.csv,data/<shop>/...}
-
-# 5. Chạy public, khoảng 2,5 giờ trên một GPU 24 GB
-bash sqlbase/run_public.sh runs/my_run
-# File để nộp: runs/my_run/submission.jsonl
-```
-
-GPU khác cấu hình thì chỉnh bằng biến môi trường, ví dụ `GPU_MEM=0.85 bash sqlbase/run_public.sh runs/my_run`. Hết bộ nhớ thì giảm `max_num_seqs` trong biến `ENGINE`.
-
-### Docker
-
-```bash
-docker build -f sqlbase/Dockerfile -t datamate .
-docker run --rm --gpus all --network none -v /duong/dan/split:/data:ro -v "$PWD/result:/result" datamate
-```
-
-Image chứa sẵn model và LoRA, chạy offline, tự soạn view cho từng shop và ghi `/result/submission.jsonl`. Trước khi build phải làm xong bước 1 và 3.
-
-Ảnh dựng được, nặng khoảng 68,5 GB, nên cần còn trống khoảng 100 GB đĩa khi build. Code nạp được và container thấy GPU, nhưng ảnh chưa chạy trọn một lượt trên GPU. Mỗi lệnh `docker` có thể cần `sudo`.
-
-## Trọng số
-
-| Thành phần | Nguồn | Dung lượng |
-|---|---|---|
-| Qwen3.5-9B | Hugging Face, lệnh ở bước 3; không đưa vào repo vì quá lớn cho Git LFS | Khoảng 19 GB |
-| LoRA v2 | `runs/lora/sql_rft_v2/adapter`, qua Git LFS | 185 MB |
-| Bộ ví dụ few-shot | `sqlbase/fewshot_bank24m.jsonl` | Trong repo |
-| View và lớp công nợ đã lưu của public | `sqlbase/config_v6_public` | Trong repo |
-| LoRA v3 | Đang train; khi có sẽ nằm ở `runs/lora/sql_rft_v3/adapter`, dùng bằng `LORA_DIR=runs/lora/sql_rft_v3/adapter` | |
+Repo này chỉ dành cho thành viên trong đội: quy chế §4.3 và §8.2 cấm chia sẻ code và dữ liệu ra ngoài đội.
 
 ## Điểm public
 
-| Bản | Điểm |
-|---|---|
-| LoRA v2, few-shot, macro công nợ (`runs/analysis/run_v2_public.sh`) | 0.491 |
-| Thêm `qty` theo đơn vị cơ bản | 0.506 |
-| Thêm trả lời `unanswerable` theo đa số | 0.516 |
-| Sinh mẫu mới, thêm chuẩn hóa tên và hệ số từ giá | 0.60 |
-| Thêm ghi chú trước SQL và ví dụ macro công nợ (`sqlbase/run_public.sh`) | 0.63 |
-
-Mỗi lần chạy sinh mẫu mới nên điểm có thể lệch nhẹ.
-
-## Pipeline notebook cũ (Gemma/pandas, không còn dùng)
-
-Public cao nhất 0.25. Giữ lại để tham khảo; phần dưới mô tả pipeline đó, không phải `sqlbase/`.
-
-### Layout
-
-```
-notebooks/
-  01_data.ipynb       data layer (read, header detection, normalization, table description) + EDA + data cards
-  02_agent.ipynb      the agent: prompts v2/v3, retrieval, LLM, sandboxed execution, voting, submission
-  03_evaluate.ipynb   scores, τ sweep, error reading, rule-retrieval study, normalization check
-src/datamate/         the parts that must be importable files
-  helpers.py          parsers injected into the generated code (money, dates, fill-down, lunar dates)
-  sandbox.py          spawned worker that runs generated code with a timeout
-  scoring.py          the PA metric from the Evaluation tab
-  nblib.py            run_lib_cells: load a notebook's `lib` cells into another notebook
-run.sh                run 02_agent headless on a split, one shard per GPU
-predict.sh            Docker entrypoint: /data -> /result
-docs/                 challenge spec, data notes, research → design decisions, results
-splits/               validation ids; hand-made rule-relevance labels (train only)
-tests/                pytest, no GPU (scripted model for the end-to-end test)
-```
-
-Cells tagged `lib` in 01 and 02 are the code; the other cells explore or run. 02 and 03 load the
-`lib` cells of the notebooks before them, so editing a function in 01 changes it everywhere.
-
-### Setup (server)
-
-Needs CUDA ≥ 12.8 (Blackwell), Python 3.12.
-
-```bash
-git clone https://github.com/hugebenevolence/zalo-ai-challenge-datamate-26 && cd zalo-ai-challenge-datamate-26
-uv venv .venv --python 3.12 && source .venv/bin/activate
-uv pip install -e ".[llm,dev]"          # add ,retrieval only for dense rule retrieval
-hf download Qwen/Qwen3.5-9B             # ~19 GB, once
-```
-
-Put the released zips in `data/` and unzip them there: `data/train/`, `data/public_test/`
-(`data/` is gitignored). The first run caches normalized tables in `data/cache/` (a few minutes).
-
-### Run
-
-```bash
-pytest -q                                                    # CPU only, ~15 s: everything but the LLM
-
-## 1. smoke test on the GPUs: 6 questions, 1 sample each
-./run.sh train runs/smoke -p IDS ../splits/smoke6.txt -p K 1
-
-## 2. validation: v3, and v2 on the same questions for comparison
-./run.sh train runs/v3_val300 -p IDS ../splits/val300.txt
-./run.sh train runs/v2_val300 -p IDS ../splits/val300.txt -p PROMPT v2
-
-## 3. public test -> upload runs/v3_public/submission.jsonl
-./run.sh public_test runs/v3_public
-```
-
-`run.sh` starts one process per visible GPU (`DATAMATE_NGPU` to override), each on a share of the
-shops, and merges `submission.jsonl` + `logs/` when all finish. A rerun into the same folder resumes.
-Progress is in `runs/<run>/shard<i>.txt`. Parameters go through papermill: `-p K 5 -p TAU 0.6
--p TEMPERATURE 0.7 -p THINKING True -p PROMPT v2` (see the first cell of `02_agent.ipynb`).
-Engine settings are environment variables; on GPUs nobody else uses:
-
-```bash
-export DATAMATE_GPU_UTIL=0.9 DATAMATE_MAX_SEQS=48
-```
-
-Then open `03_evaluate.ipynb`, set `RUNS = ["v3_val300", "v2_val300"]` and run it: PA per version on
-the same questions, τ sweep, wrong answers with their code and output.
-
-**Send back** `runs/<run>/` (submission, logs, shard*.txt). They contain competition data: share them
-inside the team only.
-
-### Status (2026-10-30)
-
-| version | validation | notes |
+| Bản | Thay đổi chính | Public |
 |---|---|---|
-| v0 | PA −0.075 on 80 q | raw tables, greedy |
-| v1 | PA +0.0625 on 80 q | gain is the abstain gate only (τ=0 precision 0.24) |
-| v2 | PA −0.233 on 30 q | the model still parsed raw dates itself → NaT → answered 0 |
-| v3 | **not run yet** | normalized tables; checked against 71 train answers without a GPU |
+| v2 | LoRA v2, few-shot, macro công nợ | 0.491 |
+| | `qty` theo đơn vị cơ bản, trả lời `unanswerable` theo đa số | 0.516 |
+| | Sinh mẫu mới, chuẩn hóa tên, hệ số đơn vị từ giá | 0.60 |
+| v6 | Ghi chú trước SQL, ví dụ macro công nợ | 0.63 |
+| v8 | LoRA v3 (thêm dữ liệu từ model 27B làm teacher), kiểm tra view theo dữ liệu | 0.639 |
+| **v9** | v8 + nhánh `sql-hints` (gợi ý theo dạng câu hỏi, khóa bỏ phiếu theo cách chấm, sửa lớp công nợ) | **0.683** |
 
-Details: [docs/leaderboard.md](docs/leaderboard.md). The dev machine's GPU driver is down, so v3's
-first real numbers come from the server runs above.
+Mỗi lần chạy sinh mẫu mới nên điểm lệch được khoảng ±1 điểm. Lịch sử chi tiết và cách đọc điểm: [docs/leaderboard.md](docs/leaderboard.md).
 
-### Before committing
+## Pipeline
 
-Notebook outputs contain competition data (regulations §4.3); a test fails if a committed notebook
-has outputs. Clear them first:
-
-```bash
-jupyter nbconvert --clear-output --inplace notebooks/*.ipynb && pytest -q && ruff check src tests notebooks
+```
+questions.jsonl ─┐
+data/<shop>/  ───┼─► ingest      nạp mọi bảng vào DuckDB, đoán header, chuẩn hóa ngày/tiền/tên, profile cột
+rulebook.md   ───┘      │
+                        ▼
+                     views       mỗi shop một lần: model viết K bản nháp SELECT ánh xạ dữ liệu thô sang
+                     debts       v_sales / v_orders và lớp công nợ (macro debt_at, debt_new, debt_repaid);
+                        │        kiểm tra trên dữ liệu (catalog, giờ, đơn vị), sửa lỗi, chọn bản đa số
+                        ▼
+                     hints       khung ngày, gợi ý theo dạng câu hỏi, giá trị khớp câu hỏi, giải nghĩa từ chat
+                     prompts     2 system prompt × K/2 mẫu, few-shot từ ngân hàng ví dụ train
+                        │
+                        ▼
+                     llm         vLLM + LoRA: 8 mẫu SQL thường, 4 mẫu thinking cho câu khó và câu công nợ
+                     sqlexec     chạy read-only có timeout, ép kiểu đáp án, lỗi → vòng sửa (repair)
+                        │
+                        ▼
+                     voting      khóa đáp án theo cách chấm, bỏ phiếu, ngưỡng 0.5, bỏ trống khi không chắc
+                        │
+                        ▼
+                     submission  ghi submission.jsonl sau mỗi shop (hết giờ vẫn giữ phần đã trả lời)
 ```
 
-### Competition constraints this code respects
+`datamate/pipeline.py` nối các bước trên; mỗi bước là một method nên chạy được riêng, không cần model (xem `analysis/replay_run.py`).
 
-- Offline inference, ≤ 15B parameters in total (Qwen3.5-9B, Apache-2.0; optional embedders 0.6B).
-- Whole private test in ≤ 6 h on 2 × RTX 5090; answers are written per shop, so a timeout keeps them.
-- Per-question logs in `<out>/logs/` (Rule 8); re-run PA must stay within 0.03 of the upload.
-- No training on test data; extra labels only on train (regulations §4.2).
+## Cấu trúc repo
 
-Docs: [challenge spec](docs/challenge.md) · [data notes](docs/data-notes.md) ·
-[research and design decisions](docs/research.md) · [results](docs/leaderboard.md)
+```
+datamate/                 package suy luận (python -m datamate.predict)
+  predict.py              CLI: đọc tham số, khởi động model, chạy Pipeline
+  pipeline.py             các bước: nạp shop → view/công nợ → prompt → lấy mẫu → bỏ phiếu → ghi kết quả
+  llm.py                  adapter quanh vLLM (chỉ file này import vllm)
+  ingest.py               nạp và chuẩn hóa dữ liệu shop, profile cột, giá trị khớp câu hỏi
+  views.py  debts.py      view chuẩn v_sales/v_orders và lớp công nợ: soạn, kiểm tra, chọn, mô tả
+  hints.py  prompts.py    gợi ý từ câu hỏi; system prompt, user message, gợi ý sửa lỗi
+  sqlexec.py voting.py    chạy một mẫu; bỏ phiếu và quyết định trả lời
+  fewshot.py              ngân hàng ví dụ train và truy xuất
+  scoring.py              Penalized Accuracy theo luật công bố (không dùng khi suy luận)
+  submission.py           ghi, gộp shard, kiểm tra định dạng file nộp
+  values.py               giá trị lọc không có trong dữ liệu (cho analysis/flags.py)
+scripts/                  run_public.sh, run_holdout.sh, flags.sh (cờ của bản đã nộp, dùng chung cho mọi lệnh chạy)
+docker/                   Dockerfile, predict.sh (entry point), requirements, model_manifest.json
+training/                 dữ liệu SFT, ghi chú, ngân hàng few-shot, train LoRA, kiểm tra kernel fla, gộp LoRA
+analysis/                 công cụ đánh giá offline: error_matrix, vote_analysis, flags, view_*, replay_run, gate_cv
+notebooks/                01_eda.ipynb (dữ liệu), 02_evaluation.ipynb (điểm, lỗi, so sánh bản nộp)
+configs/public_v9/        view và lớp công nợ của lượt 0.683 (chỉ để chạy lại public, không dùng cho private)
+assets/fewshot_bank.jsonl ngân hàng ví dụ (câu hỏi train và SQL đúng)
+adapters/sql_rft_v3/      LoRA v3 (Git LFS)
+splits/                   danh sách id: holdout600, holdout_shops, val300, smoke6, rft_train24
+tests/                    pytest, chỉ CPU
+docs/                     đề bài, ghi chú dữ liệu, nghiên cứu, lịch sử điểm
+```
+
+Không có trong git: `data/` (dữ liệu BTC), `models/` (trọng số gốc), `runs/` (kết quả chạy, log, checkpoint).
+
+## Cài đặt
+
+Cần GPU từ 24 GB (đã chạy trên 1 RTX PRO 4000 Blackwell 24 GB, RAM 30 GB), CUDA ≥ 12.8, Python 3.12, `git-lfs`.
+
+```bash
+git clone git@github.com:hugebenevolence/zalo-ai-challenge-datamate-26.git && cd zalo-ai-challenge-datamate-26
+git lfs install && git lfs pull                              # LoRA v3
+python3 -m venv .venv && .venv/bin/pip install -e ".[llm,dev]"
+hf download Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a --local-dir models/Qwen3.5-9B
+# Dữ liệu BTC: data/train/{questions,answers}.jsonl, data/public_test/questions.jsonl, mỗi split kèm rulebook.md, calendar.csv, data/<shop>/
+.venv/bin/python -m pytest -q                                # khoảng 1 giây, không cần GPU
+```
+
+## Chạy
+
+```bash
+bash scripts/run_public.sh runs/my_run            # public với view/công nợ đã lưu của bản 0.683; khoảng 3,5 giờ trên 1 GPU 24 GB
+FRESH=1 bash scripts/run_public.sh runs/fresh     # soạn lại mọi view/công nợ, đúng như bản chạy private trong Docker
+bash scripts/run_holdout.sh runs/holdout          # 632 câu holdout của train, kèm điểm (chỉ là smoke test, xem docs/leaderboard.md)
+python -m datamate.submission check runs/my_run/submission.jsonl     # kiểm tra định dạng trước khi nộp
+```
+
+Đổi cấu hình bằng biến môi trường: `GPU_MEM=0.85`, `NUM_GPUS=2`, `MODEL_DIR=...`, `LORA_DIR=...`, `ENGINE='{...}'` (giảm
+`max_num_seqs` khi hết bộ nhớ). Cờ của bản đã nộp nằm ở `scripts/flags.sh`; `python -m datamate.predict --help` liệt kê mọi cờ.
+
+### Docker (bản chạy private)
+
+```bash
+docker build -f docker/Dockerfile -t datamate .
+docker run --rm --gpus all --network none -v /duong/dan/split:/data:ro -v "$PWD/result:/result" datamate
+```
+
+Image chứa model gốc, LoRA v3 và ngân hàng ví dụ; chạy offline, mỗi GPU một tiến trình, tự soạn view cho từng shop, ghi
+`/result/submission.jsonl` và log từng câu ở `/result/logs/`. Mỗi tiến trình dừng ở `TIMEOUT_SECONDS` (mặc định 21000 giây), phần
+đã trả lời vẫn được tính. Cần làm xong bước tải model và `git lfs pull` trước khi build; image khoảng 70 GB.
+
+## Train LoRA
+
+Môi trường train riêng (`.venv-train`, xem `training/requirements.txt`; cài thêm `fla-core==0.6.0` để có kernel Gated DeltaNet).
+
+```bash
+python training/build_pool.py ...                  # gộp các lượt chạy train có nhãn thành pool mẫu
+python training/build_sft.py RUN ... --teacher TEACHER_RUN ... --fewshot assets/fewshot_bank.jsonl --out data/sft/sql_rft_v3.jsonl --easy 800
+python training/add_notes.py data/sft/sql_rft_v3.jsonl data/sft/sql_rft_v3_notes.jsonl
+.venv-train/bin/python training/check_fla.py       # kernel fla khớp bản tham chiếu PyTorch
+.venv-train/bin/python training/train_lora.py data/sft/sql_rft_v3_notes.jsonl --out runs/lora/sql_rft_v3 --model models/Qwen3.5-9B \
+    --init-adapter adapters/sql_rft_v3 --max-len 32768 --r 16 --alpha 32 --lr 5e-5 --epochs 1 --grad-accum 8 --end '<|im_end|>' \
+    --no-thinking --completion-logits
+```
+
+LoRA v3 được train tiếp từ v2 (v2 còn trong lịch sử git); bản sau train tiếp từ `adapters/sql_rft_v3` như lệnh trên. Chỉ dùng dữ
+liệu train; câu hỏi public và private không bao giờ vào dữ liệu train. LoRA v3: 2910 dòng, 364 bước, khoảng 8,2 giờ
+trên 1 GPU 24 GB (fla và `--completion-logits` cho khoảng 1300 tok/s).
+
+## Đánh giá
+
+- `notebooks/01_eda.ipynb`: các shop, bảng, định dạng file, loại đáp án, dạng câu hỏi; so train với public (public chỉ có số đếm).
+- `notebooks/02_evaluation.ipynb`: điểm một lượt chạy train theo loại / shop / dạng câu, nhóm lỗi, oracle@K, ngưỡng bỏ phiếu;
+  so các bản nộp public với nhau không cần nhãn.
+- `analysis/`: `error_matrix.py` (ma trận lỗi), `vote_analysis.py` (điểm mất ở bước quyết định), `flags.py` (cờ không cần nhãn
+  theo từng bước), `view_audit.py` / `view_tests.py` / `view_flags.py` (kiểm tra view đã lưu), `gate_cv.py` (ngưỡng theo
+  leave-one-shop-out), `replay_run.py` (dựng lại prompt và bỏ phiếu của một lượt đã lưu: một thay đổi không được phép đổi hành
+  vi phải cho 0 khác biệt).
+
+Notebook được commit **không có output** (output chứa dữ liệu thi, quy chế §4.3): chạy lại trên máy để xem.
+
+## Luật thi và cách repo tuân thủ
+
+- Suy luận offline, tổng ≤ 15B tham số (Qwen3.5-9B Apache-2.0 + LoRA 43M), không có người can thiệp.
+- Không hard-code theo id câu hỏi hay id shop. `configs/public_v9` (view lưu theo shop) chỉ dùng để chạy lại public; bản Docker
+  cho private luôn soạn view mới.
+- Không train trên tập test; chú thích thêm chỉ trên train (§4.2). Các gợi ý trong prompt là luật trong rulebook hoặc kiến thức
+  tiếng Việt chung, đã đối chiếu với đáp án train; những gì chỉ khớp câu hỏi public (danh sách từ đồng nghĩa lấy từ tên món
+  public, gợi ý dòng sản phẩm) đã bị loại.
+- Toàn bộ private test chạy ≤ 6 giờ trên 2 × RTX 5090; log từng câu cho Rule 8 (chạy lại lệch ≤ 0.03).
+
+Tài liệu: [đề bài](docs/challenge.md) · [ghi chú dữ liệu](docs/data-notes.md) · [nghiên cứu và quyết định thiết kế](docs/research.md) ·
+[khảo sát kiến trúc](docs/architecture-research-2026-10-29.md) · [lịch sử điểm](docs/leaderboard.md)

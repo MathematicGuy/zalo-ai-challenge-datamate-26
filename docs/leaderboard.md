@@ -1,24 +1,42 @@
-# Validation vs public leaderboard
+# Lịch sử điểm public và cách đọc
 
-Validation = `splits/val300.txt` (10 train questions per shop, 30 shops, seed 0), scored in
-`notebooks/03_evaluate.ipynb` (§1 scores, §2 τ sweep). Public = the score the portal shows for
-`runs/<run>_public/submission.jsonl`. Train has none of the four public-test industries
-(210 / 1000 public questions), so expect public < val.
+Public = điểm cổng thi trả về cho `submission.jsonl` của một lượt chạy trên 1000 câu public (14 shop `dev_001`–`dev_014`).
+Số câu đúng / sai ước lượng từ điểm và số câu đã trả lời: đúng = (trả lời + 1000 × PA) / 2. Không có nhãn public: điểm chỉ dùng
+ở mức tổng, không bao giờ làm nhãn cho từng câu.
 
-| run | date | change | questions | val PA | precision | τ=0 precision | public PA |
-|---|---|---|---|---|---|---|---|
-| v0 | 2026-10-28 | raw tables, greedy, 1 repair | first 80 | −0.075 | 0.44 | 0.44 | — |
-| v1 | 2026-10-28 | helpers + profiled columns + interpretation + values, k=5 T=0.7 τ=0.6 | first 80 | +0.0625 | 0.65 | 0.24 | — |
-| v2 | 2026-10-28 | v1 + answerability in code, shorter replies, abbreviations, % guard | first 30 | −0.233 | 0.11 | 0.13 | — |
-| v3 | — | v2 + normalized tables (`__date` / `__num`, fill-down, `ALL` views), `parse_*` names | not run yet | | | | |
+| Ngày | Bản (file nộp) | Thay đổi | Trả lời | Đúng / sai (ước lượng) | Public |
+|---|---|---|---|---|---|
+| 11-03 | LoRA v1 | SQL trên DuckDB, LoRA v1 (rejection sampling trên train) | 736 | 582 / 154 | 0.428 |
+| 11-04 | v2 (`sql_v2_public_debtroute`) | LoRA v2, few-shot từ ngân hàng ví dụ train, macro công nợ, định tuyến câu nợ | 821 | 656 / 165 | 0.491 |
+| 11-04 | `sub_qty_unans` | `qty` của view theo đơn vị cơ bản; trả lời `unanswerable` khi đa số | | 675 / 159 | 0.516 |
+| 11-05 | `sub_v4_final` | Sinh mẫu mới, chuẩn hóa cách viết tên, hệ số đơn vị đọc từ giá | 837 | 719 / 118 | 0.60 |
+| 11-05 | `sub_v6` | Mẫu thường bắt đầu bằng ghi chú ngắn trước SQL; ví dụ macro công nợ trong ngân hàng | 875 | 752 / 122 | 0.63 |
+| 11-05 | `sub_v7` | v6 + ẩn bảng thô (`--hide-raw`): bỏ | | | 0.623 |
+| 11-06 | `sub_v8` | LoRA v3 (2910 dòng, có 26 câu do Qwen3.8-27B giải làm teacher, chỉ trên train); kiểm tra view theo giờ và đơn vị | 889 | 764 / 125 | 0.639 |
+| 11-06 | **`sub_v9`** | v8 + nhánh `sql-hints`, bỏ 2 phần chỉ khớp public; lớp công nợ dev_003 soạn lại | 902 | 792 / 110 | **0.683** |
 
-Same 30 questions (biz_101–103) for all three: v0 −0.067 (11 correct / 13 wrong), v1 −0.100, v2 −0.233.
+Nhánh `sql-hints` (Truong-Binh Duong) đạt 0.696 trên nền 0.63 với LoRA v2.
 
-Reading the rows:
-- The v0→v1 gain is the abstain gate only; τ=0 precision fell from 0.44 to 0.24.
-- v1 logs: interpretation-before-code declared existing data missing (11 wrong "unanswerable"),
-  hand-rolled parsers, 17/250 replies cut at 2048 tokens, percent typed as number.
-- v2 logs: the model still parsed raw cells itself (`pd.to_datetime` on '1 thg 6 2025' → NaT → answer 0),
-  and mixed our `to_datetime` up with pandas'. Prompting alone did not fix it; v3 moves parsing into
-  the data layer, verified against 71 train answers without a GPU.
-- v2 ran 3 of 30 shops before the dev machine rebooted (NVIDIA driver lost on a kernel upgrade).
+## Đọc các bước tăng
+
+- **v6 → v8 (+0.9 điểm):** LoRA v3 gần như không đổi hành vi trên public: 105 câu khác v6, ròng khoảng +12 đúng / +3 sai. Dữ liệu
+  SFT v3 phần lớn giống v2, và phần khó của public (4 ngành không có trong train, từ địa phương, viết tắt tiền) nằm ngoài train.
+- **v8 → v9 (+4.4 điểm):** chỉ khoảng 90 câu khác v8 nhưng ròng +28 đúng / −15 sai. Phần lớn đến từ gợi ý theo dạng câu hỏi (mỗi gợi ý
+  là một luật trong rulebook, đã đối chiếu với đáp án train) và lớp công nợ mới của dev_003 (lớp cũ báo 26.288 đơn còn nợ).
+- **v9 so với 0.696 (−1.3 điểm):** hai phần bỏ có chủ đích (danh sách từ đồng nghĩa lấy từ tên món public, gợi ý dòng sản phẩm; chạm
+  khoảng 10 câu public, không kiểm chứng được trên train), LoRA v3 thay v2, view khác, và dao động giữa các lần chạy.
+
+## Holdout không phải cổng
+
+`splits/holdout600.txt` (632 câu train của 6 shop) đo cao hơn public một khoảng lớn và không đều: LoRA v3 đã học 724 dòng của
+chính các câu này, và các shop public có 4 ngành không có trong train (210/1000 câu). Dùng holdout như smoke test (code chạy,
+không tụt mạnh); thay đổi thật được đánh giá bằng lượt nộp public, so cùng câu với bản trước bằng các cờ không cần nhãn
+(`analysis/flags.py`, `notebooks/02_evaluation.ipynb`).
+
+## Rủi ro đang mở
+
+- Mọi điểm public ở trên dùng view và lớp công nợ đã lưu từ các lượt trước (`--views-from`). Bản Docker cho private soạn lại
+  tất cả: `FRESH=1 bash scripts/run_public.sh` đo điểm khi soạn mới.
+- View của dev_014 không cố định giữa các lần chạy: số khách khác nhau (`customer_key`) đổi 2292–2299 giữa hai lần dựng cùng
+  một câu SQL, do code nạp dữ liệu sẵn có, không do bước tách module. Ảnh hưởng các câu về khách hàng của shop này.
+- Câu về tồn kho theo lô (khoảng 31 câu public, chủ yếu dev_006) chưa có lớp riêng.
