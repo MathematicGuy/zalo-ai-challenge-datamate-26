@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The 0.63 setup on the public test, without Docker: LoRA v2, few-shot bank with macro examples, one spelling per name, notes before the SQL, saved views and debt layers (sqlbase/config_v6_public), debt routing, unanswerable majorities.
+# The 0.683 setup on the public test, without Docker: LoRA v3, few-shot bank with macro examples, one spelling per name, notes before the SQL, saved views and debt layers (sqlbase/config_v9_public), debt routing, unanswerable majorities, sql-hints question-shape hints.
 # Usage: bash sqlbase/run_public.sh [OUT]. The file to submit is OUT/submission.jsonl. Set PYTHON if python3 is not the project's venv. About 2.5 h on one 24 GB GPU.
 set -eu
 cd "$(dirname "$0")/.."
@@ -10,6 +10,6 @@ OUT=${1:-runs/public}
 ENGINE=${ENGINE:-'{"kv_cache_dtype":"fp8","max_num_seqs":128,"max_num_batched_tokens":8192,"attention_backend":"TRITON_ATTN"}'}
 mkdir -p "$OUT"
 "$PY" sqlbase/predict.py --data data/public_test --output "$OUT" --model sqlbase/models/Qwen3.5-9B --quant fp8 --k 8 --think-k 4 --gpu-mem "${GPU_MEM:-0.92}" --engine "$ENGINE" \
-  --views-from sqlbase/config_v6_public --lora "${LORA_DIR:-runs/lora/sql_rft_v2/adapter}" --lora-thinking --fewshot sqlbase/fewshot_bank24m.jsonl \
-  --debt-views --debt-route --canon-names --notes --max-tokens 2048 --answer-unanswerable
+  --views-from sqlbase/config_v9_public --lora "${LORA_DIR:-runs/lora/sql_rft_v3/adapter}" --lora-thinking --fewshot sqlbase/fewshot_bank24m.jsonl \
+  --debt-views --debt-route --canon-names --notes --context 49152 --think-budget 16384 --max-tokens 2048 --answer-unanswerable
 "$PY" train/check_submission.py "$OUT/submission.jsonl"

@@ -39,14 +39,21 @@ def score(pred, gold):
             ok = not isinstance(p, bool) and isinstance(p, (int, float)) and Decimal(str(p)).quantize(Decimal('.01'), rounding=ROUND_HALF_UP) == Decimal(str(g)).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
         elif t == 'date': ok = isinstance(p, str) and p == g
         elif t in ('number', 'boolean'): ok = key(p) == key(g)
-        elif t == 'list': ok = isinstance(p, list) and len(p) == len(g) and all(key(x) == key(y) for x, y in zip(p, g))
+        elif t == 'list':  # alias of a list/table holds the accepted forms of each item / of each row's name
+            al = gold.get('alias') or [[] for _ in g]
+            ok = isinstance(p, list) and len(p) == len(g) and all(key(x) in {key(y) for y in [z, *a]} for x, z, a in zip(p, g, al))
         elif t == 'table':
             pc, gc = p['columns'], g['columns']; pr, gr = p['rows'], g['rows']
             if not all(isinstance(x, list) for x in (pc, gc, pr, gr)) or len(pc) != len(gc): return -1
             pn, gn = list(map(norm, pc)), list(map(norm, gc))
             indices = [pn.index(c) for c in gn] if len(set(pn)) == len(pn) and set(pn) == set(gn) else list(range(len(gc)))
             if any(not isinstance(r, list) or len(r) != len(gc) for r in pr + gr): return -1
-            ok = {tuple(key(r[i]) for i in indices) for r in pr} == {tuple(map(key, r)) for r in gr}
+            left = {tuple(key(r[i]) for i in indices) for r in pr}
+            ok = len(left) == len({tuple(map(key, r)) for r in gr})
+            for r, a in zip(gr, gold.get('alias') or [[] for _ in gr]):
+                hit = next((x for x in left if x[1:] == tuple(map(key, r[1:])) and x[0] in {key(y) for y in [r[0], *a]}), None)
+                ok = ok and hit is not None
+                left.discard(hit)
         else: ok = False
         return 1 if ok else -1
     except (ValueError, TypeError, KeyError, IndexError, InvalidOperation): return -1

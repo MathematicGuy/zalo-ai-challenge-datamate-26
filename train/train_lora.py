@@ -40,6 +40,20 @@ def load_rows(paths: list[Path], max_len: int, tokenizer, thinking: bool = True,
     return rows
 
 
+class CompletionLogitsTrainer(Trainer):
+    """The same loss, with the LM head run only on the positions that predict reply tokens (logits_to_keep and the matching label
+    slice; the model shifts labels inside). The prompt is ~97% of each row, and Unsloth's fused CE otherwise runs the 248k-vocab head
+    and a float32 softmax on every prompt position before masking them."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        labels = inputs["labels"]
+        first = (labels != -100).any(0).nonzero()
+        if len(first):
+            m = labels.shape[1] - int(first[0]) + 1   # from the last prompt position, which predicts the first reply token
+            inputs = {**inputs, "labels": labels[:, -m:].contiguous(), "logits_to_keep": m}
+        return super().compute_loss(model, inputs, return_outputs=return_outputs, num_items_in_batch=num_items_in_batch)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("data", type=Path, nargs="+")
@@ -56,6 +70,7 @@ def main():
     ap.add_argument("--init-adapter", type=Path, help="continue from this adapter's weights (same r and target modules)")
     ap.add_argument("--end", default=END, help="end-of-turn text appended to every reply ('<|im_end|>' for Qwen)")
     ap.add_argument("--no-thinking", action="store_true", help="render prompts with enable_thinking=False (non-thinking replies)")
+    ap.add_argument("--completion-logits", action="store_true", help="LM head only on reply positions (same loss, less compute)")
     args = ap.parse_args()
 
     model, tokenizer = FastModel.from_pretrained(model_name=args.model, max_seq_length=args.max_len,
@@ -76,7 +91,7 @@ def main():
     n_lab = sum(sum(x != -100 for x in r["labels"]) for r in rows)
     print(f"tokens: {n_tok:,} total, {n_lab:,} trained ({n_lab / max(n_tok, 1):.1%})")
 
-    trainer = Trainer(
+    trainer = (CompletionLogitsTrainer if args.completion_logits else Trainer)(
         model=model,
         train_dataset=Dataset.from_list(rows),
         data_collator=DataCollatorForSeq2Seq(tok, padding=True, label_pad_token_id=-100),
