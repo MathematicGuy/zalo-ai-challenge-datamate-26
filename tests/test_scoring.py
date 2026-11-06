@@ -17,7 +17,7 @@ TABLE = {"type": "table", "answer": {"columns": ["khach_hang", "so_tien_no"],
     ({"type": "string", "answer": "Sting dầu 330ml"}, STR, -1),        # wrong diacritic
     ({"type": "list", "answer": ["Sting dâu 330ml"]}, STR, -1),        # wrong type
     ({"type": "number", "answer": 4820000}, {"type": "number", "answer": 4820000}, 1),
-    ({"type": "number", "answer": 4820000.0000001}, {"type": "number", "answer": 4820000}, 1),
+    ({"type": "number", "answer": 4820000.0000001}, {"type": "number", "answer": 4820000}, -1),  # numbers match exactly (Evaluation tab)
     ({"type": "number", "answer": "4820000"}, {"type": "number", "answer": 4820000}, -1),
     ({"type": "number", "answer": 4820001}, {"type": "number", "answer": 4820000}, -1),
     ({"type": "percent", "answer": -12.449}, {"type": "percent", "answer": -12.45}, 1),

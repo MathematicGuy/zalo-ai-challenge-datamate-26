@@ -1,37 +1,37 @@
 [project]
 name = "datamate"
-version = "0.1.0"
-description = "Zalo AI Challenge 2026 — DataMate: Vietnamese QA over messy tabular data"
+version = "0.9.0"
+description = "Zalo AI Challenge 2026, DataMate: Vietnamese questions over messy shop spreadsheets, answered with LLM-written DuckDB SQL"
 requires-python = ">=3.12"
 dependencies = [
+    "duckdb==2.0.0",
     "pandas>=2.2",
     "openpyxl>=3.1",
-    "nbformat",
-    "papermill",
-    "ipykernel",
+    "python-calamine>=0.9",
 ]
 
 [project.optional-dependencies]
-llm = ["vllm==0.32.0", "ninja"]
-retrieval = ["sentence-transformers"]   # only for RULE_RETRIEVER dense / hybrid (02_agent)
-dev = ["pytest", "ruff", "matplotlib", "nbconvert"]
+llm = ["vllm==0.32.0"]                       # inference (the training stack lives in training/requirements.txt, its own venv)
+dev = ["pytest", "ruff", "matplotlib", "nbformat", "nbconvert", "ipykernel"]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["datamate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
-line-length = 120
+line-length = 200
 
 [tool.ruff.lint]
 select = ["E", "F", "W"]
-ignore = ["E731", "E741"]
+# Prompt and hint text is kept verbatim (wrapping changes what the model reads); compact one-line statements in analysis tools.
+ignore = ["E501", "E701", "E702", "E731", "E741", "E401", "E402"]
 
 [tool.ruff.lint.per-file-ignores]
-# Prompt and helper-doc text is kept verbatim; wrapping it would change what the model reads.
-"src/datamate/helpers.py" = ["E501"]
-# Notebooks: prompt text kept verbatim; names from run_lib_cells are invisible to ruff.
-"notebooks/*" = ["E501", "F821"]
+"notebooks/*" = ["F401"]   # one shared setup cell per notebook
