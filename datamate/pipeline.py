@@ -169,11 +169,13 @@ class Pipeline:
                     views.build(db, sql)
                 print(f"[views] {b}: price per qty differs over 3x on {len(bad)} items, factors read from the prices -> {len(left)} left, kept={sql == fixed}", flush=True)
         if b in vtexts:
+            # drafts behind the pick: a saved layer keeps no drafts, so its own count (prompts of the 0.683 run said "7/0" there)
+            nk = len(vtexts[b]) or (vfixed[b].get("k") if b in vfixed else 0) or a.k
             if sql and nv * 4 >= a.k:  # too little agreement = the mapping is a guess; better no view than a wrong one (counted against one set of a.k drafts)
-                view = views.describe(db, sql, nv, len(vtexts[b]))
+                view = views.describe(db, sql, nv, nk)
                 meta["tables"] += [profile(db, v, "canonical view") for v in ("v_sales", "v_orders")]
-            vinfo = {"agree": nv, "k": len(vtexts[b]), "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
-            print(f"[views] {b}: {nv}/{len(vtexts[b])} agree, used={bool(view)}, {len(verr)} failed drafts", flush=True)
+            vinfo = {"agree": nv, "k": nk, "used": bool(view), "sql": sql, "errors": verr, "drafts": vtexts[b]}
+            print(f"[views] {b}: {nv}/{nk} agree, used={bool(view)}, {len(verr)} failed drafts", flush=True)
         debt = ""
         if a.debt_views:
             dfixed, dchecked = self.dfixed, self.dchecked
