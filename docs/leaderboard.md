@@ -31,7 +31,7 @@ Nhánh `sql-hints` (Truong-Binh Duong) đạt 0.696 trên nền 0.63 với LoRA 
 `splits/holdout600.txt` (632 câu train của 6 shop) đo cao hơn public một khoảng lớn và không đều: LoRA v3 đã học 724 dòng của
 chính các câu này, và các shop public có 4 ngành không có trong train (210/1000 câu). Dùng holdout như smoke test (code chạy,
 không tụt mạnh); thay đổi thật được đánh giá bằng lượt nộp public, so cùng câu với bản trước bằng các cờ không cần nhãn
-(`analysis/flags.py`, `notebooks/02_evaluation.ipynb`).
+(`analysis/flags.py`, `notebooks/03_evaluation.ipynb`).
 
 ## Rủi ro đang mở
 

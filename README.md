@@ -63,11 +63,12 @@ datamate/                 package suy luận (python -m datamate.predict)
   scoring.py              Penalized Accuracy theo luật công bố (không dùng khi suy luận)
   submission.py           ghi, gộp shard, kiểm tra định dạng file nộp
   values.py               giá trị lọc không có trong dữ liệu (cho analysis/flags.py)
+  notebook.py             phần dùng chung của notebook: đường dẫn (máy hay Kaggle), khả năng GPU, chạy từng bước kèm log
 scripts/                  run_public.sh, run_holdout.sh, flags.sh (cờ của bản đã nộp, dùng chung cho mọi lệnh chạy)
 docker/                   Dockerfile, predict.sh (entry point), requirements, model_manifest.json
 training/                 dữ liệu SFT, ghi chú, ngân hàng few-shot, train LoRA, kiểm tra kernel fla, gộp LoRA
 analysis/                 công cụ đánh giá offline: error_matrix, vote_analysis, flags, view_*, replay_run, gate_cv
-notebooks/                01_eda.ipynb (dữ liệu), 02_evaluation.ipynb (điểm, lỗi, so sánh bản nộp)
+notebooks/                01_eda → 02_inference → 03_evaluation → 04_training_data → 05_train_lora (chạy được trên máy và Kaggle)
 configs/public_v9/        view và lớp công nợ của lượt 0.683 (chỉ để chạy lại public, không dùng cho private)
 assets/fewshot_bank.jsonl ngân hàng ví dụ (câu hỏi train và SQL đúng)
 adapters/sql_rft_v3/      LoRA v3 (Git LFS)
@@ -116,33 +117,55 @@ Image chứa model gốc, LoRA v3 và ngân hàng ví dụ; chạy offline, mỗ
 
 ## Train LoRA
 
-Môi trường train riêng (`.venv-train`, xem `training/requirements.txt`; cài thêm `fla-core==0.6.0` để có kernel Gated DeltaNet).
+Cách dễ tái lặp nhất là hai notebook `04_training_data` và `05_train_lora` (bên dưới). Bằng dòng lệnh: môi trường train riêng
+(`.venv-train`, xem `training/requirements.txt`; cài thêm `fla-core==0.6.0 --no-deps` để có kernel Gated DeltaNet).
 
 ```bash
-python training/build_pool.py ...                  # gộp các lượt chạy train có nhãn thành pool mẫu
-python training/build_sft.py RUN ... --teacher TEACHER_RUN ... --fewshot assets/fewshot_bank.jsonl --out data/sft/sql_rft_v3.jsonl --easy 800
-python training/add_notes.py data/sft/sql_rft_v3.jsonl data/sft/sql_rft_v3_notes.jsonl
+# lượt chạy có nhãn trên train (24 shop ngoài holdout), giữ prompt: đầu vào của dữ liệu SFT
+python -m datamate.predict --data data/train --ids splits/rft_train24.txt --output runs/train_pool --save-prompts ...   # cờ như scripts/flags.sh
+python training/build_sft.py runs/train_pool [--teacher TEACHER_RUN ...] --fewshot assets/fewshot_bank.jsonl --out data/sft/sql_rft.jsonl --easy 800 --max 4000
+python training/add_notes.py data/sft/sql_rft.jsonl data/sft/sql_rft_notes.jsonl
 .venv-train/bin/python training/check_fla.py       # kernel fla khớp bản tham chiếu PyTorch
-.venv-train/bin/python training/train_lora.py data/sft/sql_rft_v3_notes.jsonl --out runs/lora/sql_rft_v3 --model models/Qwen3.5-9B \
+.venv-train/bin/python training/train_lora.py data/sft/sql_rft_notes.jsonl --out runs/lora/sql_rft_v4 --model models/Qwen3.5-9B \
     --init-adapter adapters/sql_rft_v3 --max-len 32768 --r 16 --alpha 32 --lr 5e-5 --epochs 1 --grad-accum 8 --end '<|im_end|>' \
-    --no-thinking --completion-logits
+    --no-thinking --completion-logits [--resume]
 ```
 
 LoRA v3 được train tiếp từ v2 (v2 còn trong lịch sử git); bản sau train tiếp từ `adapters/sql_rft_v3` như lệnh trên. Chỉ dùng dữ
 liệu train; câu hỏi public và private không bao giờ vào dữ liệu train. LoRA v3: 2910 dòng, 364 bước, khoảng 8,2 giờ
-trên 1 GPU 24 GB (fla và `--completion-logits` cho khoảng 1300 tok/s).
+trên 1 GPU 24 GB (fla và `--completion-logits` cho khoảng 1300 tok/s). Mỗi dòng SFT dài 9k–19k token (prompt chứa rulebook và
+schema của shop), nên `--max-len` dưới khoảng 16k bỏ phần lớn dữ liệu.
 
-## Đánh giá
+## Notebook (máy local và Kaggle)
 
-- `notebooks/01_eda.ipynb`: các shop, bảng, định dạng file, loại đáp án, dạng câu hỏi; so train với public (public chỉ có số đếm).
-- `notebooks/02_evaluation.ipynb`: điểm một lượt chạy train theo loại / shop / dạng câu, nhóm lỗi, oracle@K, ngưỡng bỏ phiếu;
-  so các bản nộp public với nhau không cần nhãn.
+| Notebook | Làm gì | Cần |
+|---|---|---|
+| `01_eda` | shop, tệp, loại đáp án, dạng câu hỏi, khác biệt rulebook, một shop sau khi nạp | CPU |
+| `02_inference` | chạy pipeline trên một split (thử vài câu hoặc cả split), gộp và kiểm tra file nộp, điểm nếu là train | GPU bf16 ≥ 24 GB |
+| `03_evaluation` | điểm một lượt chạy train theo loại / shop / dạng câu, nhóm lỗi, ngưỡng, oracle@K; so các bản nộp không cần nhãn | CPU |
+| `04_training_data` | dòng SFT từ lượt chạy train có nhãn, ghi chú trước SQL, thống kê dữ liệu | CPU, GPU cho bước ghi chú |
+| `05_train_lora` | kiểm tra kernel fla, train QLoRA (train tiếp từ checkpoint khi phiên bị ngắt), đồ thị loss | GPU, phiên riêng |
+
+Mỗi notebook có một ô `parameters` (chạy được bằng papermill: `papermill 02_inference.ipynb out.ipynb -p LIMIT 10`) và ô cài đặt đầu
+tiên tự xử lý cả hai môi trường. Cả 5 notebook đã chạy được trên máy local (bản thử ngắn); nhánh Kaggle chưa chạy thử trên Kaggle.
+
+Trên Kaggle:
+1. Settings: bật Internet; Accelerator GPU cho 02 / 04 / 05. Model gốc được tải về `/tmp/models` mỗi phiên (khoảng 19 GB); kết quả nằm ở
+   `/kaggle/working/runs` và được giữ sau phiên.
+2. Add-ons → Secrets: `GITHUB_TOKEN` (token chỉ đọc repo này) để clone repo private và tải LoRA qua Git LFS.
+3. Dữ liệu: một dataset private chứa `train/` và `public_test/` như `data/` ở trên; notebook tự tìm trong `/kaggle/input`.
+4. Phần cứng: pipeline cần GPU bf16 từ 24 GB; T4 / P100 (16 GB, không có bf16) không chạy được suy luận, notebook sẽ báo và dừng. Train
+   trên GPU 16 GB chưa thử (`MAX_LEN = 16384` và `LIMIT_ROWS` nhỏ để học). Phiên Kaggle có giới hạn thời gian: `05_train_lora` lưu
+   checkpoint mỗi `SAVE_STEPS` bước và train tiếp với `RESUME = True`.
+
+Notebook được commit **không có output** (output chứa dữ liệu thi, quy chế §4.3); một test kiểm tra điều này.
+
+## Công cụ phân tích
+
 - `analysis/`: `error_matrix.py` (ma trận lỗi), `vote_analysis.py` (điểm mất ở bước quyết định), `flags.py` (cờ không cần nhãn
   theo từng bước), `view_audit.py` / `view_tests.py` / `view_flags.py` (kiểm tra view đã lưu), `gate_cv.py` (ngưỡng theo
   leave-one-shop-out), `replay_run.py` (dựng lại prompt và bỏ phiếu của một lượt đã lưu: một thay đổi không được phép đổi hành
   vi phải cho 0 khác biệt).
-
-Notebook được commit **không có output** (output chứa dữ liệu thi, quy chế §4.3): chạy lại trên máy để xem.
 
 ## Luật thi và cách repo tuân thủ
 

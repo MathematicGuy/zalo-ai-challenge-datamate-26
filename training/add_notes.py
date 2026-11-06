@@ -1,5 +1,6 @@
 """Adds short notes before the answer of the plain rows of an SFT file, so plain samples learn to reason a little before the SQL. Greedy, base weights; a reply that breaks the format keeps the row as it was.
-python training/add_notes.py IN.jsonl OUT.jsonl"""
+python training/add_notes.py IN.jsonl OUT.jsonl [--model models/Qwen3.5-9B] [--rulebook data/train/rulebook.md] [--quant fp8|none]"""
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -15,12 +16,18 @@ QUESTION: {q}
 SQL:
 {sql}"""
 def main():
-    src, dst = map(Path, sys.argv[1:3])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("src", type=Path); ap.add_argument("dst", type=Path)
+    ap.add_argument("--model", default=str(R / "models/Qwen3.5-9B")); ap.add_argument("--rulebook", type=Path, default=R / "data/train/rulebook.md")
+    ap.add_argument("--quant", default="fp8", help="fp8 (Ada and newer) or none (Ampere)")
+    a = ap.parse_args()
+    src, dst = a.src, a.dst
     rows = [json.loads(x) for x in src.open(encoding="utf-8")]
     plain = [r for r in rows if not r.get("thinking") and not r["reply"].startswith("Notes:")]
-    llm = LLM(model=str(R / "models/Qwen3.5-9B"), gpu_memory_utilization=0.92, max_model_len=16384, enable_prefix_caching=True, seed=0, language_model_only=True, quantization="fp8", kv_cache_dtype="fp8",
+    fp8 = {"quantization": "fp8", "kv_cache_dtype": "fp8"} if a.quant == "fp8" else {}
+    llm = LLM(model=a.model, gpu_memory_utilization=0.92, max_model_len=16384, enable_prefix_caching=True, seed=0, language_model_only=True, **fp8,
               max_num_seqs=128, max_num_batched_tokens=8192, attention_backend="TRITON_ATTN")
-    rulebook = (R / "data/train/rulebook.md").read_text(encoding="utf-8-sig")
+    rulebook = a.rulebook.read_text(encoding="utf-8-sig")
     chats = []
     for r in plain:
         q = r["user"].rsplit("QUESTION: ", 1)[-1].strip()[:800]
