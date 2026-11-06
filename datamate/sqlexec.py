@@ -62,8 +62,10 @@ def to_answer(kind, names, rows):
             out = rows[0]
         else:
             raise ValueError(f"list needs one column, got {names}")
-        if any(x is None or isinstance(x, (bool, list, dict)) for x in out):  # the format check rejects such a list
-            raise ValueError("every list item must be one non-NULL name or number (one row per item, one column)")
+        if any(x is None for x in out):  # a filter matched nothing; the shape message made the repair reshape it (holdout: 50 -> 17 samples)
+            raise ValueError("a list item is NULL (check filters/values)")
+        if any(isinstance(x, (bool, list, dict)) for x in out):  # the format check rejects such a list
+            raise ValueError("every list item must be one name or number (one row per item, one column)")
         return out
     if len(rows) != 1 or len(names) != 1:
         raise ValueError(f"expected one cell, got {len(rows)} rows x {names}")

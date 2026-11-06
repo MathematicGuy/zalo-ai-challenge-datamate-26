@@ -83,7 +83,7 @@ def repair_hint(err):
     mostly an empty result or a result of the wrong shape)."""
     if err.startswith("expected one cell, got 1 rows"):
         return "Return only the one value asked (a single column, e.g. just the name), or use TYPE list/table if the question asks for several values.\n"
-    if err.startswith(("expected one cell, got 0 rows", "result is NULL")):
+    if err.startswith(("expected one cell, got 0 rows", "result is NULL", "a list item is NULL")):
         return ("No row matched the filters: check every filter value against the SCHEMA values and VALUES MATCHING THE QUESTION (spelling, "
                 "or the value sits in another column or table, e.g. an address in the customer list), and the date window against DATE ANCHORS.\n")
     if re.match(r"expected one cell, got \d+ rows x \['count\(", err, re.I):
