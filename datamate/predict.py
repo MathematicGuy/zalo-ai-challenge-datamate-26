@@ -11,7 +11,7 @@ from pathlib import Path
 
 from .llm import Engine
 from .pipeline import Pipeline, load_questions, run_in_background
-from .submission import write_submission
+from .submission import merge_shards, write_submission
 
 
 def parse_args(argv=None):
@@ -50,6 +50,8 @@ def parse_args(argv=None):
     p.add_argument("--think-budget", type=int, default=8192)
     p.add_argument("--deadline", type=float, default=0, help="seconds for this process; thinking is skipped for a shop once the run is behind a pro-rata pace")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--log-dir", type=Path, help="one log record per question goes here (Docker: /result/logs); default OUTPUT/logs")
+    p.add_argument("--merge-into", type=Path, help="after every shop, merge the sibling shard dirs of --output into DIR/submission.jsonl (Docker: /result)")
     p.add_argument("--engine", type=json.loads, default={}, help='extra vLLM engine kwargs as JSON, e.g. {"kv_cache_dtype": "fp8"}')
     return p.parse_args(argv)
 
@@ -60,7 +62,11 @@ def main(argv=None):
     qs, shops = load_questions(a)
     a.output.mkdir(parents=True, exist_ok=True)
     (a.output / "logs").mkdir(exist_ok=True)
+    if a.log_dir:
+        a.log_dir.mkdir(parents=True, exist_ok=True)
     write_submission(a.output / "submission.jsonl", qs, {})  # valid all-abstain file in case the run is killed
+    if a.merge_into:
+        merge_shards(a.merge_into, a.data / "questions.jsonl", shards=a.output.parent, copy_logs=False, quiet=True)
     pipe = Pipeline(a)
     loading = run_in_background(pipe.load_shops, shops)  # DuckDB loading overlaps the model start (the engine is a separate process)
     pipe.engine = Engine(a.model, tp=a.tp, gpu_mem=a.gpu_mem, context=a.context, seed=a.seed, quant=a.quant, lora=a.lora, engine_kwargs=a.engine)

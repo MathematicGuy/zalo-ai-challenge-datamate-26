@@ -103,7 +103,8 @@ def has_debt_layer(db):
         return False
 
 
-def execute(db, text, question=""):
+def execute(db, text, question="", trace=None):
+    """trace (optional dict) receives the SQL as it is run against the database (after the rewrites below), for the run logs."""
     kind, sql = parse(text)
     if kind not in TYPES:
         raise ValueError("missing or invalid TYPE line")
@@ -119,6 +120,8 @@ def execute(db, text, question=""):
         # train, shops with a debt layer: macro samples 740/816 right, raw-table samples 21/504, no question only a raw sample solved
         raise ValueError("this shop has the debt layer: answer a debt question with its macros, debt_at(DATE 'X') for what is owed at the end of a day, "
                          "debt_new(DATE 'A', DATE 'B') for new debt and debt_repaid(DATE 'A', DATE 'B') for repayments in a period (see DEBTS), not from the raw tables")
+    if trace is not None:
+        trace["sql"] = sql.rstrip(";")
     names, rows = run_sql(db, sql.rstrip(";"))
     ans = to_answer(kind, names, rows)
     if kind == "string" and (m := re.fullmatch(r"(?i)\s*th[aá]ng\s*(\d{1,2})\s*[/-]\s*(\d{4})\s*", ans)) and 1 <= int(m[1]) <= 12:

@@ -145,21 +145,36 @@ File cần nộp: `runs/public/submission.jsonl`. Log và trace từng câu nằ
 
 ## Docker (bản chạy private)
 
-Cần làm xong bước 1 và 3 của phần cài đặt (LoRA và model gốc được chép vào image).
+Theo hướng dẫn Docker bản cuối của BTC (`zac2026_DataMate_docker_guideline_final.pdf`). Cần làm xong bước 1 và 3 của phần cài đặt
+(LoRA và model gốc được chép vào image), và có sẵn dữ liệu train, dữ liệu SFT, log train ở máy build.
 
 ```bash
-docker build -f docker/Dockerfile -t datamate .
-docker run --rm --gpus all --network none \
-    -v /duong/dan/toi/split:/data:ro -v "$PWD/result:/result" datamate
+python3 scripts/pack_training_code.py      # build/training_code: code, dữ liệu, log, checkpoint, data_manifest.json (SHA-256)
+docker build --platform linux/amd64 -f docker/Dockerfile -t zaic2026_datamate_<team_name>:final .
+# lệnh chấm của BTC: 2 GPU, không mạng, /data chỉ đọc, shm 16 GB
+docker run --rm --gpus '"device=0,1"' --network none --shm-size=16g --entrypoint bash \
+    -v /duong/dan/toi/split:/data:ro -v "$PWD/result:/result" zaic2026_datamate_<team_name>:final /code/predict.sh
 ```
 
+- Layout trong image: `/code/predict.sh` (chạy không tham số), `/code/README.md` (mô tả cho BTC, nguồn ở `docker/README.md`),
+  `/code/src/datamate`, `/code/models/{Qwen3.5-9B,lora}`, `/code/training_code/` (README ở `docker/training_code_README.md`).
 - `/data` là một thư mục split giống `data/public_test/` (questions.jsonl, rulebook.md, calendar.csv, data/).
-- Kết quả: `/result/submission.jsonl` và log từng shard ở `/result/logs/`.
+- Kết quả:
+  - `/result/submission.jsonl` được ghi lại sau mỗi shop, nên nếu bị dừng giữa chừng thì các câu đã trả lời vẫn được tính;
+  - `/result/logs/<id>.json`: mỗi câu một bản ghi trên một dòng, gồm `id`, `answer`, `elapsed_ms`, `thinking`, `code`, `output`;
+  - `/result/work/`: view, lớp công nợ và trace của từng GPU.
 - Container chạy offline và luôn soạn view mới cho từng shop, không dùng `configs/public_v9`.
-- Mỗi tiến trình dừng sau `TIMEOUT_SECONDS` (mặc định 21000 giây). Các câu đã trả lời trước đó vẫn được tính.
-- Image có sẵn code train ở `/app/training` và môi trường train riêng ở `/opt/venv-train`. Chạy các lệnh ở phần
-  [Train LoRA](#train-lora) với `--entrypoint bash`, đổi `.venv/bin/python` thành `python3` và `.venv-train/bin/python`
-  thành `/opt/venv-train/bin/python`.
+- Mỗi tiến trình dừng sau `TIMEOUT_SECONDS` (mặc định 21000 giây).
+- Base image là vLLM 0.32.0, không phải bản 0.10.1.1 BTC gợi ý, vì 0.10.1.1 chưa chạy được Qwen3.5. Hướng dẫn cho phép image khác
+  miễn hỗ trợ RTX 5090.
+- Train lại trong image: `bash /code/training_code/train.sh` (môi trường train riêng ở `/opt/venv-train`).
+- Nén để nộp:
+  ```bash
+  set -o pipefail
+  docker save zaic2026_datamate_<team_name>:final | pigz -p 8 > zaic2026_datamate_<team_name>.tar.gz
+  pigz -dc zaic2026_datamate_<team_name>.tar.gz | wc -c                                  # dung lượng .tar chưa nén, phải ≤ 100 GB
+  md5sum zaic2026_datamate_<team_name>.tar.gz > zaic2026_datamate_<team_name>.tar.gz.md5
+  ```
 
 ## Đánh giá và phân tích lỗi
 
@@ -273,8 +288,9 @@ datamate/                 package inference (python -m datamate.predict)
   submission.py           ghi, gộp shard, kiểm tra định dạng file nộp
   values.py               giá trị lọc không có trong dữ liệu (cho analysis/flags.py)
   notebook.py             phần dùng chung của notebook: đường dẫn, khả năng GPU, chạy từng bước kèm log
-scripts/                  run_public.sh, run_holdout.sh, flags.sh (flag của bản đã nộp)
-docker/                   Dockerfile, predict.sh (entry point), requirements.txt, model_manifest.json
+scripts/                  run_public.sh, run_holdout.sh, flags.sh (flag của bản đã nộp), pack_training_code.py (đóng gói training_code cho Docker)
+docker/                   Dockerfile, predict.sh (entry point /code/predict.sh), README.md (= /code/README.md), train.sh và
+                          training_code_README.md (vào /code/training_code), requirements.txt, model_manifest.json
 training/                 dữ liệu SFT, ghi chú, ngân hàng few-shot, train LoRA, kiểm tra kernel fla, gộp LoRA
 analysis/                 công cụ đánh giá offline (bảng ở trên)
 notebooks/                00_full_pipeline (cả 5 phần), 01_eda → 02_inference → 03_evaluation → 04_training_data → 05_train_lora

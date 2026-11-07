@@ -21,7 +21,7 @@ from .hints import DEBT_WORDS, data_span, outside, question_hints
 from .ingest import entity_hits, load_business, norm, profile, schema_text
 from .prompts import NOTES, SYSTEM, SYSTEM_ALT, chat, repair_hint
 from .sqlexec import execute, parse
-from .submission import write_submission
+from .submission import merge_shards, write_submission
 from .voting import debt_pool, final_answer, top_votes, vote
 
 
@@ -64,6 +64,9 @@ class Pipeline:
         self.half = a.k // 2
         self.vtexts, self.vchecked, self.vfixed = {}, {}, {}
         self.dchecked, self.dfixed = {}, {}
+        # one log record per question: --log-dir (Docker: /result/logs), else the run's own logs/
+        self.log_dir = getattr(a, "log_dir", None) or (a.output / "logs" if getattr(a, "output", None) else None)
+        self._calls, self._runs = [], []
 
     # ---- shops -------------------------------------------------------------------------------------------------------
     def load_shops(self, shops):
@@ -211,6 +214,21 @@ class Pipeline:
                  for j, s in enumerate(self.systems)] for q in todo]
 
     # ---- sampling ----------------------------------------------------------------------------------------------------
+    def _call(self, i, kind, j, text, thinking_mode=False, lora=True):
+        """Log one model generation for question i (call order kept for the per-question log)."""
+        self._calls[i].append({"kind": kind, "sample": j, "thinking_mode": thinking_mode, "lora": bool(lora and self.a.lora), "text": text})
+
+    def _exec(self, shop, i, j, text, question):
+        """Execute sample j of question i and log the SQL as run, its output or its error."""
+        tr = {}
+        try:
+            p = execute(shop.db, text, question, trace=tr)
+        except Exception as e:
+            self._runs[i].append({"sample": j, "sql": tr.get("sql"), "executed": "sql" in tr, "output": None, "error": str(e)[:400]})
+            raise
+        self._runs[i].append({"sample": j, "sql": tr.get("sql"), "executed": "sql" in tr, "output": p, "error": None})
+        return p
+
     def _repair(self, shop, todo, chats, texts, preds, errs, pairs, prompt_of):
         """Greedy repair turns for failed samples (i, j): the error plus a hint for its kind, up to --repairs turns."""
         a, eng = self.a, self.engine
@@ -227,10 +245,11 @@ class Pipeline:
             routs = eng.chat([conv[ij] for ij in pairs], eng.params(n=1, temperature=0, max_tokens=a.max_tokens), lora=True)
             for (i, j), o in zip(pairs, routs):
                 out = o.outputs[0].text
+                self._call(i, "repair", j, out)
                 texts[i][j] += "\n#REPAIR\n" + out
                 conv[i, j].append({"role": "assistant", "content": out})
                 try:
-                    preds[i][j] = execute(shop.db, out, todo[i]["question"])
+                    preds[i][j] = self._exec(shop, i, j, out, todo[i]["question"])
                 except Exception as e:
                     errs[i][j] += " | " + str(e)[:400]
             turns += len(pairs)
@@ -249,6 +268,10 @@ class Pipeline:
         outs = eng.chat(batch, sp, lora=True, prefill=a.notes)
         it = iter(outs)
         texts = [[(NOTES if a.notes else "") + o.text for _ in systems for o in next(it).outputs] if f else [] for f in fits]
+        self._calls, self._runs = [[] for _ in todo], [[] for _ in todo]  # per question: model calls and SQL runs, in order
+        for i, ts in enumerate(texts):
+            for j, t in enumerate(ts):
+                self._call(i, "sample", j, t)
 
         # Execute. Failed samples get greedy repair turns with the error message.
         preds = [[None] * len(t) for t in texts]
@@ -256,7 +279,7 @@ class Pipeline:
         for i, ts in enumerate(texts):
             for j, t in enumerate(ts):
                 try:
-                    preds[i][j] = execute(shop.db, t, todo[i]["question"])
+                    preds[i][j] = self._exec(shop, i, j, t, todo[i]["question"])
                 except Exception as e:
                     errs[i][j] = str(e)[:400]
                     repair.append((i, j))
@@ -266,9 +289,10 @@ class Pipeline:
             tchats = [chats[i][j // half] + [{"role": "assistant", "content": texts[i][j].rstrip() + "\nTYPE:"}] for i, j in notype]
             touts = eng.chat(tchats, eng.params(n=1, temperature=0, max_tokens=4), lora=True, prefill=True)
             for (i, j), o in zip(notype, touts):
+                self._call(i, "type_fill", j, o.outputs[0].text)
                 texts[i][j] = texts[i][j].rstrip() + "\nTYPE:" + o.outputs[0].text
                 try:
-                    preds[i][j], errs[i][j] = execute(shop.db, texts[i][j], todo[i]["question"]), None
+                    preds[i][j], errs[i][j] = self._exec(shop, i, j, texts[i][j], todo[i]["question"]), None
                     repair.remove((i, j))
                 except Exception as e:
                     errs[i][j] = str(e)[:400]
@@ -289,8 +313,9 @@ class Pipeline:
                     if "<think>" not in t:  # Qwen3.5's template opens <think> in the prompt and parse() keys on it to spot a cut-off thought
                         t = "<think>\n" + t
                     texts[i].append(t)
+                    self._call(i, "thinking_sample", len(texts[i]) - 1, t, thinking_mode=True, lora=a.lora_thinking)
                     try:
-                        preds[i].append(execute(shop.db, t, todo[i]["question"])); errs[i].append(None)
+                        preds[i].append(self._exec(shop, i, len(texts[i]) - 1, t, todo[i]["question"])); errs[i].append(None)
                     except Exception as e:
                         preds[i].append(None); errs[i].append(str(e)[:400])
                 # failed thinking samples get the same repair turns (non-thinking). A cut-off thought has no query to fix
@@ -328,23 +353,63 @@ class Pipeline:
             is_behind = lambda: a.deadline and time.time() - t0 > a.deadline * (len(results) + len(todo)) / max(1, len(qs))
             texts, preds, errs, pools, n_first, n_rep, behind = self.sample(shop, todo, chats, is_behind)
             n_repair += n_rep
-            per_q = (time.time() - tb) / max(1, len(todo))  # batched generation: shop wall time shared equally (view batch excluded)
-            for q, (r, ans, conf), ts, ps, es, cs in zip(todo, self.decide(todo, preds, pools), texts, preds, errs, chats):
+            decisions = self.decide(todo, preds, pools)
+            t_ans = time.time()
+            # Batched generation: every question of the shop enters the batch when the shop starts (its data reads, views and debt
+            # layer included) and gets its answer when the batch ends, so they share one elapsed time. The per-shop view and debt
+            # drafts made before the loop are shared preparation, like loading the model.
+            elapsed_ms = int(round((t_ans - tb) * 1000))
+            per_q = (t_ans - tb) / max(1, len(todo))
+            layers = {"views": str(a.output / "logs" / f"_views_{b}.json"), **({"debt": str(a.output / "logs" / f"_debt_{b}.json")} if a.debt_views else {})}
+            for n, (q, (r, ans, conf), ts, ps, es, cs, pool) in enumerate(zip(todo, decisions, texts, preds, errs, chats, pools)):
                 results[q["id"]] = r
                 rec = {"id": q["id"], "business_id": b, "question": q["question"], "final": r, "vote": ans, "conf": conf,
                        "elapsed_seconds": round(per_q, 2), "samples": [{"text": t, "pred": pr, "error": e} for t, pr, e in zip(ts, ps, es)]}
                 if a.save_prompts:  # the system message is SYSTEM / SYSTEM_ALT + rulebook (samples 0..K/2-1 / the rest), the user message is shared
                     rec["prompt_user"] = cs[0][1]["content"]
                 tr.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-                (a.output / "logs" / f"{q['id']}.json").write_text(json.dumps(rec, ensure_ascii=False, default=str, indent=1), encoding="utf-8")
+                log = question_log(q, r, elapsed_ms, self._calls[n], self._runs[n],
+                                   {"code": "src/datamate/voting.py::vote, final_answer",
+                                    "inputs": {"answers": [ps[j] for j in pool], "samples": pool, "threshold": a.threshold,
+                                               "out_of_range": q["_oor"], "answer_unanswerable": a.answer_unanswerable},
+                                    "vote": ans, "share": conf}, layers)
+                (self.log_dir / f"{q['id']}.json").write_text(json.dumps(log, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
             tr.flush()
             (a.output / "logs" / f"_views_{b}.json").write_text(json.dumps(shop.vinfo, ensure_ascii=False, indent=1), encoding="utf-8")
             write_submission(a.output / "submission.jsonl", qs, results)
+            if getattr(a, "merge_into", None):  # the shared /result/submission.jsonl holds every answer saved so far
+                merge_shards(a.merge_into, a.data / "questions.jsonl", shards=a.output.parent, copy_logs=False, quiet=True)
             db.close()
             print(f"[{b}] {len(todo)} q, {sum(r['type'] != 'abstain' for r in (results[q['id']] for q in todo))} answered, "
                   f"{n_first} repairs, gen {time.time() - tg:.0f}s, total {time.time() - tb:.0f}s{', behind pace: no thinking' if behind else ''}", flush=True)
         tr.close()
         return results, n_repair
+
+
+def reasoning(call):
+    """The model's reasoning in one generation, as generated: the text inside <think>…</think> (to the end when the thought was cut
+    off), else the notes a plain sample writes before its TYPE line and SQL. A TYPE fill (a few tokens of the type) has none."""
+    text = call["text"]
+    if call["kind"] == "type_fill":
+        return ""
+    if "<think>" in text:
+        return text.split("<think>", 1)[1].split("</think>", 1)[0].strip()
+    cut = min([k for k in (text.find("TYPE:"), text.find("```")) if k >= 0], default=len(text))
+    return text[:cut].strip()
+
+
+def question_log(q, answer, elapsed_ms, calls, runs, decision, layers):
+    """One log record per question (organizers' Docker guide, section 3.3): id, answer, elapsed_ms, thinking (one string per
+    model call, in call order; null when no call reasoned), code and output (every SQL run against the database, in order),
+    then the full generations, every execution attempt, the vote and the shop layers the SQL reads (views, debt macros)."""
+    thinking = [reasoning(c) for c in calls]
+    ran = [x for x in runs if x["executed"]]
+    return {"id": q["id"], "business_id": q["business_id"], "question": q["question"], "as_of_date": q.get("as_of_date"),
+            "answer": answer, "elapsed_ms": elapsed_ms,
+            "thinking": thinking if any(thinking) else None,
+            "code": [x["sql"] for x in ran] or None,
+            "output": [x["output"] if x["error"] is None else {"error": x["error"]} for x in ran] or None,
+            "calls": calls, "executions": runs, "decision": decision, "shop_layers": layers}
 
 
 def run_in_background(fn, *args):
