@@ -130,13 +130,13 @@ pd.DataFrame([{"type": t, "shop": shop, "question": text[:100], "answer": json.d
     "trace = [r for p in sorted(out.glob": [
         ("markdown", """### Một câu hỏi đi qua pipeline
 
-Câu hỏi có nhiều mẫu nhất (thường là câu khó, được thêm mẫu thinking): chế độ, câu SQL và đáp án của từng mẫu, rồi kết quả bỏ phiếu.
+Câu hỏi có tỷ lệ đồng thuận thấp nhất (thường là câu khó, được thêm mẫu thinking): chế độ, câu SQL và đáp án của từng mẫu, rồi kết quả bỏ phiếu.
 - Mẫu không viết ra được SQL hợp lệ (ví dụ ghi chú lặp mãi không dừng) không được tính phiếu.
 - Tỷ lệ đồng thuận = số phiếu của đáp án thắng / tổng số mẫu."""),
         ("code", """def last_sql(text):
     return " ".join(text.split("```sql")[-1].split("```")[0].split()) if "```sql" in text else ""
 
-q = max(trace, key=lambda r: len(r["samples"]))
+q = min(trace, key=lambda r: (r["conf"], -len(r["samples"])))
 print(q["question"])
 samples = pd.DataFrame([{"mẫu": k + 1,
                          "chế độ": "thinking" if "</think>" in s["text"] else "thường",
