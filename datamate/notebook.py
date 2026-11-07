@@ -46,7 +46,10 @@ class GPU:
 
 
 def gpus() -> list[GPU]:
-    """Visible GPUs from nvidia-smi (no torch import, so the notebook kernel stays light)."""
+    """Visible GPUs from nvidia-smi (no torch import, so the notebook kernel stays light). DATAMATE_NO_GPU=1 hides them (to try the
+    saved-result path of the GPU steps on a machine that has one)."""
+    if os.environ.get("DATAMATE_NO_GPU"):
+        return []
     if not shutil.which("nvidia-smi"):
         return []
     out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"],
@@ -57,6 +60,12 @@ def gpus() -> list[GPU]:
         major, minor = cap.split(".")
         found.append(GPU(name, round(float(mem) / 1024, 1), (int(major), int(minor))))
     return found
+
+
+def big_gpu(found: list[GPU] | None = None) -> bool:
+    """A bf16 GPU with >= 22 GB visible: what inference, the notes step and training need (T4 / P100 are not)."""
+    found = gpus() if found is None else found
+    return bool(found) and min(found, key=lambda g: g.mem_gb).bf16 and min(g.mem_gb for g in found) >= 22
 
 
 def find_data() -> Path | None:
@@ -101,6 +110,25 @@ class Env:
         if g.mem_gb < 30:
             flags = _set(flags, "--gpu-mem", "0.92")
         return flags, engine
+
+    @property
+    def can_run_llm(self) -> bool:
+        return big_gpu(self.gpus)
+
+    def use_saved(self, name: str, dest: Path) -> Path:
+        """Without a big enough GPU (Kaggle T4 / P100, a CPU session): copy the result of this step saved from a 24 GB GPU run
+        (runs/saved/<name> in the checkout) to where the next cells read it, so the notebook still runs end to end."""
+        src = self.root / "runs/saved" / name
+        if not src.exists():
+            raise RuntimeError(f"this step needs a bf16 GPU with >= 24 GB, and {src} (a saved result) is not in this checkout")
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dest)
+        print(f"no bf16 GPU with >= 24 GB here: using the result saved from a 24 GB GPU run ({src.relative_to(self.root)})", flush=True)
+        return dest
 
     def training_precision(self) -> str:
         return "bf16" if self.gpus and min(g.capability for g in self.gpus) >= (8, 0) else "fp16"
@@ -184,6 +212,9 @@ def install(kind: str = "base"):
     """Kaggle and Colab only (a local checkout has its own venvs): pip install what a notebook needs.
     base: the package (EDA, evaluation), llm: + vLLM (inference, notes), train: the training stack (Unsloth, fla) without vLLM."""
     if not (ON_KAGGLE or ON_COLAB):
+        return
+    if kind in ("llm", "train") and not big_gpu():
+        print(f'no bf16 GPU with >= 24 GB: "{kind}" packages not installed, the steps that need them use saved results', flush=True)
         return
     pip = [sys.executable, "-m", "pip", "install", "-q"]
     if kind == "train":

@@ -230,7 +230,10 @@ Ghi chú:
 
 - Chạy theo thứ tự 01 → 05 (hoặc `00_full_pipeline` từ trên xuống). Ô đầu tiên tự nhận biết đang ở máy local, Kaggle hay Colab.
 - Mỗi notebook có một ô `parameters`, chạy được bằng papermill: `papermill notebooks/02_inference.ipynb out.ipynb -p LIMIT 10`.
-- Cả 5 notebook đã chạy trên máy local (GPU 24 GB). Trên Kaggle (CPU) đã chạy hết 01, 03 và 04 (bỏ bước ghi chú). Nhánh Colab chưa chạy thử.
+- Cả 5 notebook đã chạy trên máy local (GPU 24 GB). `00_full_pipeline` đã chạy hết trên Kaggle (CPU). Nhánh Colab chưa chạy thử.
+- Không có GPU bf16 từ 24 GB (Kaggle T4 / P100, CPU): các bước cần model (suy luận ở 02, ghi chú ở 04, train ở 05) dùng kết quả đã chạy
+  trên GPU 24 GB, lưu trong `runs/saved/` của bản sao repo đính kèm (không có trong git), để notebook vẫn chạy hết và vẽ được kết quả.
+  `DATAMATE_NO_GPU=1` giả lập trường hợp này trên máy có GPU.
 - Muốn giữ một bản có output (ví dụ để dạy) mà repo vẫn sạch: `python scripts/execute_notebooks.py --out <thư mục ngoài repo> 01_eda 03_evaluation`
   (đổi tham số bằng `--set LIMIT=20`), rồi `python scripts/build_full_notebook.py --from-dir <thư mục đó> --out <thư mục đó>/00_full_pipeline.ipynb`.
 - Notebook được commit **không kèm output** (output chứa dữ liệu thi), `tests/test_notebooks.py` kiểm tra điều này. Trước khi commit:
