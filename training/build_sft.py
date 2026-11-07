@@ -3,10 +3,12 @@ What changes from v2: a question keeps only its solutions on the best route that
 is taught only where nothing else worked. A thinking sample's final SQL also serves as a plain row when plain samples missed that route (plain samples never learned the macros),
 debt questions get up to 3 rows and survive the --max cut. --teacher runs (a bigger model on the questions the 9B never solved, 2 plain samples then thinking samples) feed rows the same way, also safe from the cut. Scorer: datamate.scoring.score_one, the one that matches the leaderboard's alias handling.
 Plain rows: questions with 0-5 of 8 right samples give up to 2 solutions, questions with 6-8 right give --easy rows in all. Thinking rows: 1 per question, gold answer without a repair turn."""
+import os
 import argparse, json, random, re, sys
 from collections import Counter
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
+DATA = Path(os.environ.get("DATAMATE_DATA") or R / "data")   # the notebooks set it (Kaggle and Colab data live elsewhere)
 sys.path.insert(0, str(R))
 from datamate import prompts
 from datamate import fewshot
@@ -17,8 +19,8 @@ ap.add_argument("runs", nargs="+", type=Path); ap.add_argument("--out", type=Pat
 ap.add_argument("--teacher", nargs="*", type=Path, default=[]); ap.add_argument("--fewshot", type=Path); ap.add_argument("--fewshot-k", type=int, default=4); ap.add_argument("--max", type=int, default=2400); ap.add_argument("--easy", type=int, default=300)
 a = ap.parse_args()
 rng = random.Random(0)
-gold = {x["id"]: x for x in map(json.loads, open(R / "data/train/answers.jsonl"))}
-rulebook = (R / "data/train/rulebook.md").read_text(encoding="utf-8-sig")
+gold = {x["id"]: x for x in map(json.loads, open(DATA / "train/answers.jsonl"))}
+rulebook = (DATA / "train/rulebook.md").read_text(encoding="utf-8-sig")
 head, *sections = re.split(r"(?m)^(?=## )", rulebook)
 VIEWS, DEBT = re.compile(r"(?i)\bv_(sales|orders)(_all)?\b"), re.compile(r"debt_(at|new|repaid)\s*\(")
 DEBT_Q = re.compile(r"(^|_)no(_|$)|cong_no|mua_chiu|ghi_no")

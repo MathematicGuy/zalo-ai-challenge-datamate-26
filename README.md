@@ -19,7 +19,7 @@ liệu đã chuẩn hóa, kết quả được bỏ phiếu, và hệ thống ch
 5. [Docker (bản chạy private)](#docker-bản-chạy-private)
 6. [Đánh giá và phân tích lỗi](#đánh-giá-và-phân-tích-lỗi)
 7. [Train LoRA](#train-lora)
-8. [Notebook (máy local và Kaggle)](#notebook-máy-local-và-kaggle)
+8. [Notebook (máy local, Kaggle và Colab)](#notebook-máy-local-kaggle-và-colab)
 9. [Cấu trúc repo](#cấu-trúc-repo)
 10. [Kết quả public](#kết-quả-public)
 11. [Tuân thủ luật thi](#tuân-thủ-luật-thi)
@@ -217,19 +217,22 @@ Ghi chú:
 - Mỗi dòng SFT dài từ 9k đến 19k token vì prompt chứa rulebook và schema của shop. `--max-len` dưới khoảng 16k sẽ bỏ phần lớn dữ liệu.
 - `training/build_fewshot_bank.py` tạo lại `assets/fewshot_bank.jsonl`, còn `training/merge_lora.py` gộp LoRA vào model gốc.
 
-## Notebook (máy local và Kaggle)
+## Notebook (máy local, Kaggle và Colab)
 
 | Notebook           | Làm gì                                                                                                 | Cần                       |
 | ------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------- |
+| `00_full_pipeline` | cả 5 phần bên dưới trong một notebook (ghép tự động bằng `scripts/build_full_notebook.py`)             | như từng phần             |
 | `01_eda`           | shop, tệp, loại đáp án, dạng câu hỏi, khác biệt rulebook, một shop sau khi nạp                         | CPU                       |
 | `02_inference`     | chạy pipeline trên một split (vài câu hoặc cả split), gộp và kiểm tra file nộp, chấm điểm nếu là train | GPU bf16 ≥ 24 GB          |
 | `03_evaluation`    | điểm theo loại / shop / dạng câu, nhóm lỗi, ngưỡng, Oracle@K, so các bản nộp không cần nhãn            | CPU                       |
 | `04_training_data` | dữ liệu SFT từ lượt chạy train có nhãn, ghi chú trước SQL, thống kê                                    | CPU, GPU cho bước ghi chú |
 | `05_train_lora`    | kiểm tra kernel fla, train QLoRA (tiếp tục được khi phiên bị ngắt), đồ thị loss                        | GPU                       |
 
-- Chạy theo thứ tự 01 → 05. Ô đầu tiên của mỗi notebook tự nhận biết đang ở máy local hay Kaggle.
+- Chạy theo thứ tự 01 → 05 (hoặc `00_full_pipeline` từ trên xuống). Ô đầu tiên tự nhận biết đang ở máy local, Kaggle hay Colab.
 - Mỗi notebook có một ô `parameters`, chạy được bằng papermill: `papermill notebooks/02_inference.ipynb out.ipynb -p LIMIT 10`.
-- Cả 5 notebook đã chạy thử trên máy local. Nhánh Kaggle chưa được chạy thử trên Kaggle.
+- Cả 5 notebook đã chạy trên máy local (GPU 24 GB). Trên Kaggle (CPU) đã chạy hết 01, 03 và 04 (bỏ bước ghi chú). Nhánh Colab chưa chạy thử.
+- Muốn giữ một bản có output (ví dụ để dạy) mà repo vẫn sạch: `python scripts/execute_notebooks.py --out <thư mục ngoài repo> 01_eda 03_evaluation`
+  (đổi tham số bằng `--set LIMIT=20`), rồi `python scripts/build_full_notebook.py --from-dir <thư mục đó> --out <thư mục đó>/00_full_pipeline.ipynb`.
 - Notebook được commit **không kèm output** (output chứa dữ liệu thi), `tests/test_notebooks.py` kiểm tra điều này. Trước khi commit:
   `jupyter nbconvert --clear-output --inplace notebooks/*.ipynb`.
 
@@ -237,10 +240,19 @@ Trên Kaggle:
 
 1. **Settings:** bật Internet, chọn Accelerator GPU cho 02 / 04 / 05. Model gốc được tải về `/tmp/models` mỗi phiên (khoảng 19 GB).
    Kết quả nằm ở `/kaggle/working/runs` và được giữ sau phiên.
-2. **Add-ons → Secrets:** thêm `GITHUB_TOKEN` (token đọc được repo). Ô đầu tiên dùng token này để clone repo và tải LoRA qua Git LFS.
+2. **Code:** đính kèm một dataset là bản sao repo (kèm `adapters/` thật và các `runs/` mà 03 / 04 đọc). Ô đầu tiên dùng bản này nếu có.
+   Nếu không, thêm `GITHUB_TOKEN` (token đọc được repo) trong **Add-ons → Secrets** để ô đầu tiên clone repo và tải LoRA qua Git LFS.
 3. **Dữ liệu:** thêm một dataset chứa `train/` và `public_test/` như `data/` ở trên. Notebook tự tìm trong `/kaggle/input`.
 4. **Giới hạn phiên:** `05_train_lora` lưu checkpoint mỗi `SAVE_STEPS` bước, đặt `RESUME = True` để train tiếp. Train trên GPU
    16 GB chưa được thử. Nếu chỉ để học, đặt `MAX_LEN = 16384` và `LIMIT_ROWS` nhỏ.
+
+Trên Colab:
+
+1. **Drive:** tạo `MyDrive/datamate/` gồm `code/` (bản sao repo như dataset Kaggle ở trên) và `data/` (gồm `train/`, `public_test/`).
+   Không có `code/` thì thêm secret `GITHUB_TOKEN` (biểu tượng chìa khoá, bật quyền cho notebook) để ô đầu tiên clone repo.
+2. **Runtime:** GPU cho 02 / 04 / 05 (bf16, từ 24 GB, ví dụ A100 hoặc L4). Ô đầu tiên mount Drive. Model gốc tải về `/content/models`,
+   kết quả lưu ở `MyDrive/datamate/runs` (giữ sau phiên).
+3. **05_train_lora:** chạy trong một phiên riêng (stack train khác vLLM của 02 / 04), giống trên Kaggle.
 
 ## Cấu trúc repo
 
@@ -262,7 +274,7 @@ scripts/                  run_public.sh, run_holdout.sh, flags.sh (flag của b�
 docker/                   Dockerfile, predict.sh (entry point), requirements.txt, model_manifest.json
 training/                 dữ liệu SFT, ghi chú, ngân hàng few-shot, train LoRA, kiểm tra kernel fla, gộp LoRA
 analysis/                 công cụ đánh giá offline (bảng ở trên)
-notebooks/                01_eda → 02_inference → 03_evaluation → 04_training_data → 05_train_lora
+notebooks/                00_full_pipeline (cả 5 phần), 01_eda → 02_inference → 03_evaluation → 04_training_data → 05_train_lora
 configs/public_v9/        view và lớp công nợ của lượt 0.683 (chỉ để chạy lại public)
 assets/fewshot_bank.jsonl ngân hàng ví dụ: câu hỏi train và SQL đúng
 adapters/sql_rft_v3/      LoRA v3 (Git LFS)

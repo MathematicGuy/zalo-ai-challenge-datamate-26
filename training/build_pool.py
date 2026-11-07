@@ -4,16 +4,18 @@ python training/build_pool.py --fresh runs/sql_v8_gen7 --old runs/sql_v5_gen24 r
 - runs/sql_v8_teacher_keep/trace.jsonl: teacher questions on shops whose views did not change
 - runs/analysis/v8_teacher_ids_NN.txt: pool questions no 9B sample solved and no kept teacher question covers, 40 per chunk, shops mixed
 - runs/views_v8_teacher/logs: the views and debt layers each pool shop was sampled with (a rejected view as no view, as at k=2 it would pass)"""
+import os
 import argparse, json, random, shutil, sys
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
+DATA = Path(os.environ.get("DATAMATE_DATA") or R / "data")   # the notebooks set it (Kaggle and Colab data live elsewhere)
 sys.path.insert(0, str(R))
 from datamate.scoring import score
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--fresh", type=Path, required=True); ap.add_argument("--old", type=Path, nargs="+", required=True); ap.add_argument("--teacher-keep", type=Path, nargs="*", default=[])
 a = ap.parse_args()
-gold = {x["id"]: x for x in map(json.loads, open(R / "data/train/answers.jsonl"))}
+gold = {x["id"]: x for x in map(json.loads, open(DATA / "train/answers.jsonl"))}
 fresh = [json.loads(l) for l in open(R / a.fresh / "trace.jsonl", encoding="utf-8")]
 redone = {t["business_id"] for t in fresh}
 pool, src_of = [], {}

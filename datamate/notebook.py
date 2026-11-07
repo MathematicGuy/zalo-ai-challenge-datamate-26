@@ -9,6 +9,8 @@ Where things live:
     local   repo checkout with data/, models/, runs/ inside it (DATAMATE_DATA / DATAMATE_MODELS / DATAMATE_RUNS override)
     Kaggle  repo wherever it was cloned or attached. Competition data found under /kaggle/input. Base weights in /tmp/models
             (too big for the saved output). Runs in /kaggle/working/runs (kept after the session)
+    Colab   Google Drive mounted, code and data in MyDrive/datamate/{code,data}. Base weights in /content/models. Runs in
+            MyDrive/datamate/runs (kept after the session)
 """
 from __future__ import annotations
 
@@ -23,6 +25,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ON_KAGGLE = Path("/kaggle/input").exists()
+ON_COLAB = not ON_KAGGLE and "COLAB_RELEASE_TAG" in os.environ
+COLAB_DRIVE = Path("/content/drive/MyDrive/datamate")   # Colab: code/ and data/ uploaded to Google Drive under this folder
 BASE_MODEL = ("Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a")  # repo id, pinned revision (docker/model_manifest.json)
 
 
@@ -61,6 +65,8 @@ def find_data() -> Path | None:
         return Path(os.environ["DATAMATE_DATA"])
     if (REPO / "data").exists():
         return REPO / "data"
+    if ON_COLAB and (COLAB_DRIVE / "data").exists():
+        return COLAB_DRIVE / "data"
     if ON_KAGGLE:
         for q in sorted(Path("/kaggle/input").glob("**/questions.jsonl")):
             if q.parent.name in ("train", "public_test", "private_test"):
@@ -175,9 +181,9 @@ class Env:
 
 
 def install(kind: str = "base"):
-    """Kaggle only (a local checkout has its own venvs): pip install what a notebook needs.
+    """Kaggle and Colab only (a local checkout has its own venvs): pip install what a notebook needs.
     base: the package (EDA, evaluation), llm: + vLLM (inference, notes), train: the training stack (Unsloth, fla) without vLLM."""
-    if not ON_KAGGLE:
+    if not (ON_KAGGLE or ON_COLAB):
         return
     pip = [sys.executable, "-m", "pip", "install", "-q"]
     if kind == "train":
@@ -207,12 +213,15 @@ def setup(verbose: bool = True) -> Env:
     """Paths, GPUs and the repo on sys.path. Prints what was found."""
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
-    runs = Path(os.environ.get("DATAMATE_RUNS") or ("/kaggle/working/runs" if ON_KAGGLE else REPO / "runs"))
-    models = Path(os.environ.get("DATAMATE_MODELS") or ("/tmp/models" if ON_KAGGLE else REPO / "models"))
+    data = find_data()
+    if data:
+        os.environ["DATAMATE_DATA"] = str(data)      # scripts run from the notebooks (training/*.py) read the same data
+    runs = Path(os.environ.get("DATAMATE_RUNS") or ("/kaggle/working/runs" if ON_KAGGLE else COLAB_DRIVE / "runs" if ON_COLAB else REPO / "runs"))
+    models = Path(os.environ.get("DATAMATE_MODELS") or ("/tmp/models" if ON_KAGGLE else "/content/models" if ON_COLAB else REPO / "models"))
     env = Env(REPO, find_data(), models, runs, gpus())
     env.runs.mkdir(parents=True, exist_ok=True)
     if verbose:
-        print(f"{'Kaggle' if ON_KAGGLE else 'local'} | repo {env.root} | data {env.data or 'NOT FOUND (set DATAMATE_DATA)'} | models {env.models} | runs {env.runs}")
+        print(f"{'Kaggle' if ON_KAGGLE else 'Colab' if ON_COLAB else 'local'} | repo {env.root} | data {env.data or 'NOT FOUND (set DATAMATE_DATA)'} | models {env.models} | runs {env.runs}")
         for g in env.gpus or []:
             print(f"GPU {g.name}: {g.mem_gb} GB, sm{g.capability[0]}{g.capability[1]}, bf16 {g.bf16}, fp8 {g.fp8}")
         if not env.gpus:

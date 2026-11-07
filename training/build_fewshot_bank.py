@@ -1,16 +1,18 @@
 """Few-shot bank from a labeled run: python training/build_fewshot_bank.py RUN [RUN ...] --out assets/fewshot_bank.jsonl
 For each question one reply whose answer matches gold and whose SQL reads only the canonical views (the shortest, up to 900 characters)."""
+import os
 import argparse, json, sys
 from collections import Counter
 from pathlib import Path
 R = Path(__file__).resolve().parents[1]
+DATA = Path(os.environ.get("DATAMATE_DATA") or R / "data")   # the notebooks set it (Kaggle and Colab data live elsewhere)
 sys.path.insert(0, str(R))
 from datamate import fewshot
 from datamate.scoring import score
 from datamate.sqlexec import parse
 ap = argparse.ArgumentParser(); ap.add_argument("runs", nargs="+"); ap.add_argument("--out", required=True); ap.add_argument("--max-sql", type=int, default=900)
 a = ap.parse_args()
-gold = {x["id"]: x for x in map(json.loads, open(R / "data/train/answers.jsonl"))}
+gold = {x["id"]: x for x in map(json.loads, open(DATA / "train/answers.jsonl"))}
 rows, types = [], Counter()
 for run in a.runs:
     for line in open(R / run / "trace.jsonl", encoding="utf-8"):
