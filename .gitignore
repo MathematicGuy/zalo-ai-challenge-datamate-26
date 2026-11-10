@@ -19,3 +19,9 @@ unsloth_compiled_cache/
 code.zip
 litreview-*.pdf
 build/
+
+# Local-only: slide decks, the organizers' guide PDF, Docker build outputs
+*.pptx
+zac2026_*.pdf
+result_docker/
+zaic2026_datamate_*.tar.gz*

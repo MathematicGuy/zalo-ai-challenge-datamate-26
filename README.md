@@ -1,31 +1,63 @@
-# DataMate - Zalo AI Challenge 2026
+<div align="center">
 
-Hệ thống trả lời câu hỏi tiếng Việt về dữ liệu bán hàng của từng cửa hàng (csv / xlsx / sqlite, mỗi shop một kiểu lộn xộn).
-Với mỗi câu hỏi, hệ thống trả về một đáp án có kiểu (số, phần trăm, ngày, chuỗi, danh sách, bảng, `unanswerable`) hoặc bỏ trống
-khi không chắc. Điểm là Penalized Accuracy: đúng +1, bỏ trống 0, sai -1.
+<img src="docs/assets/banner.svg" alt="DataMate: câu hỏi tiếng Việt về dữ liệu cửa hàng, trả lời bằng SQL DuckDB có bỏ phiếu" width="100%">
 
-**Ý tưởng chính:** Qwen3.5-9B cùng một LoRA tự train viết nhiều câu SQL DuckDB cho mỗi câu hỏi. Các câu SQL được chạy trên dữ
-liệu đã chuẩn hóa, kết quả được bỏ phiếu, và hệ thống chỉ trả lời khi đủ số mẫu đồng ý.
+<p>
+  <a href="#kết-quả"><img alt="Public PA" src="https://img.shields.io/badge/public%20PA-0.683-2ea44f"></a>
+  <a href="https://challenge.zalo.ai"><img alt="Zalo AI Challenge 2026" src="https://img.shields.io/badge/Zalo%20AI%20Challenge-2026%20Track%202-0068FF"></a>
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white">
+  <img alt="vLLM 0.32.0" src="https://img.shields.io/badge/vLLM-0.32.0-30A2FF">
+  <img alt="LLM" src="https://img.shields.io/badge/LLM-Qwen3.5--9B%20%2B%20LoRA-7B3FE4">
+  <img alt="DuckDB" src="https://img.shields.io/badge/SQL-DuckDB-FFC107?logo=duckdb&logoColor=black">
+  <a href="#docker-bản-chạy-private"><img alt="Docker" src="https://img.shields.io/badge/docker-offline%20image-2496ED?logo=docker&logoColor=white"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-- Kết quả: **0.683** public (bản nộp v9). Lịch sử đầy đủ ở [docs/leaderboard.md](docs/leaderboard.md).
-- Ràng buộc: chạy offline, một model ≤ 15B tham số (9.65B + LoRA 43M), xong private test trong ≤ 6 giờ.
+<p>
+  <a href="#cài-đặt">Cài đặt</a> &nbsp;|&nbsp;
+  <a href="#inference">Inference</a> &nbsp;|&nbsp;
+  <a href="#kết-quả">Kết quả</a> &nbsp;|&nbsp;
+  <a href="#docker-bản-chạy-private">Docker</a> &nbsp;|&nbsp;
+  <a href="#notebook-máy-local-kaggle-và-colab">Notebook</a>
+</p>
+
+</div>
+
+DataMate trả lời câu hỏi tiếng Việt về dữ liệu bán hàng của từng cửa hàng (csv, xlsx, sqlite, mỗi shop một kiểu lộn xộn). Với
+mỗi câu hỏi, hệ thống trả về một đáp án có kiểu (số, phần trăm, ngày, chuỗi, danh sách, bảng, `unanswerable`) hoặc bỏ trống khi
+không chắc. Điểm là Penalized Accuracy: đúng +1, bỏ trống 0, sai -1. Repo này là giải pháp đầy đủ của nhóm cho Track 2 của Zalo
+AI Challenge 2026: inference, train, đánh giá, notebook và image Docker chạy offline.
+
+## Điểm nổi bật
+
+- **0.683 trên public test**, từ 0.25 của bản agent pandas đầu tiên, chỉ train trên tập train của BTC.
+- **Một model, đúng giới hạn.** Qwen3.5-9B và một LoRA tự train (9.70B tham số, giới hạn 15B), chạy offline, mỗi GPU một phần
+  các shop, tự dừng ở 5 giờ 50 phút để kịp giới hạn 6 giờ.
+- **Model viết SQL, DuckDB tính.** Mỗi câu có 8 mẫu SQL chạy read-only trên dữ liệu đã chuẩn hóa. Đáp án chỉ được trả khi đủ số mẫu
+  đồng ý, còn lại bỏ trống để không bị trừ điểm.
+- **Tái lập được.** Notebook từ EDA đến train LoRA (đã chạy trên máy local và Kaggle); image Docker chứa code, dữ liệu train, log,
+  checkpoint và manifest SHA-256 theo hướng dẫn của BTC.
 
 ## Mục lục
 
 1. [Cách hoạt động](#cách-hoạt-động)
-2. [Yêu cầu](#yêu-cầu)
-3. [Cài đặt](#cài-đặt)
-4. [Inference](#inference)
-5. [Docker (bản chạy private)](#docker-bản-chạy-private)
-6. [Đánh giá và phân tích lỗi](#đánh-giá-và-phân-tích-lỗi)
-7. [Train LoRA](#train-lora)
-8. [Notebook (máy local, Kaggle và Colab)](#notebook-máy-local-kaggle-và-colab)
-9. [Cấu trúc repo](#cấu-trúc-repo)
-10. [Kết quả public](#kết-quả-public)
+2. [Kết quả](#kết-quả)
+3. [Yêu cầu](#yêu-cầu)
+4. [Cài đặt](#cài-đặt)
+5. [Inference](#inference)
+6. [Docker (bản chạy private)](#docker-bản-chạy-private)
+7. [Đánh giá và phân tích lỗi](#đánh-giá-và-phân-tích-lỗi)
+8. [Train LoRA](#train-lora)
+9. [Notebook (máy local, Kaggle và Colab)](#notebook-máy-local-kaggle-và-colab)
+10. [Cấu trúc repo](#cấu-trúc-repo)
 11. [Tuân thủ luật thi](#tuân-thủ-luật-thi)
-12. [License](#license)
+12. [Ghi nhận](#ghi-nhận)
 
 ## Cách hoạt động
+
+<p align="center">
+  <img src="docs/figures/pipeline.png" alt="Pipeline: dữ liệu shop vào DuckDB, prompt, Qwen3.5-9B + LoRA viết 8 mẫu SQL, chạy và bỏ phiếu" width="100%">
+</p>
 
 ```
 questions.jsonl ─┐
@@ -53,6 +85,21 @@ rulebook.md   ───┘      │
 
 `datamate/pipeline.py` nối các bước. Mỗi bước là một method riêng, nên có thể dựng lại prompt và kết quả bỏ phiếu của một lượt đã
 lưu mà không cần GPU (`analysis/replay_run.py`).
+
+## Kết quả
+
+| Bản       | Thay đổi chính                                                                                   | Public    |
+| --------- | ------------------------------------------------------------------------------------------------ | --------- |
+| v2        | LoRA v2, few-shot, macro công nợ                                                                 | 0.491     |
+|           | `qty` theo đơn vị cơ bản, trả lời `unanswerable` theo đa số                                      | 0.516     |
+|           | sinh mẫu mới, chuẩn hóa tên, hệ số đơn vị suy từ giá                                             | 0.60      |
+| v6        | ghi chú trước SQL, ví dụ macro công nợ                                                           | 0.63      |
+| sql-hints | v6 + gợi ý theo dạng câu hỏi, có danh sách đồng nghĩa lấy từ tên món public (đã bỏ ở v9)         | 0.696     |
+| v8        | LoRA v3 (thêm dữ liệu do model 27B giải làm teacher, chỉ trên train), kiểm tra view theo dữ liệu | 0.639     |
+| **v9**    | v8 + `sql-hints`, khóa bỏ phiếu theo cách chấm, sửa lớp công nợ                                  | **0.683** |
+
+`sql-hints` (0.696) là nhánh của thành viên nhóm, có danh sách đồng nghĩa lấy từ tên món của public; danh sách này đã bị
+loại vì không suy ra từ train, nên bản nộp chính thức là v9. Lịch sử đầy đủ: [docs/leaderboard.md](docs/leaderboard.md).
 
 ## Yêu cầu
 
@@ -147,6 +194,17 @@ File cần nộp: `runs/public/submission.jsonl`. Log và trace từng câu nằ
 
 Theo hướng dẫn Docker bản cuối của BTC (`zac2026_DataMate_docker_guideline_final.pdf`). Cần làm xong bước 1 và 3 của phần cài đặt
 (LoRA và model gốc được chép vào image), và có sẵn dữ liệu train, dữ liệu SFT, log train ở máy build.
+
+Cách nhanh nhất là `docker/build.sh`, làm đúng từng bước của hướng dẫn (mục 9, 10, 11):
+
+```bash
+TEAM=<team_name> bash docker/build.sh pack       # git lfs pull + build/training_code (code, dữ liệu, log, checkpoint, manifest)
+TEAM=<team_name> bash docker/build.sh build      # build image, in platform, dung lượng và cây /code
+TEAM=<team_name> bash docker/build.sh test 10    # lệnh chấm của BTC trên public test, 10 câu đầu mỗi GPU (bỏ số để chạy hết)
+TEAM=<team_name> bash docker/build.sh export     # .tar.gz, dung lượng .tar chưa nén (≤ 100 GB) và file .md5 để gửi BTC
+```
+
+Các lệnh tương đương, làm tay:
 
 ```bash
 python3 scripts/pack_training_code.py      # build/training_code: code, dữ liệu, log, checkpoint, data_manifest.json (SHA-256)
@@ -304,18 +362,6 @@ docs/                     đề bài, ghi chú dữ liệu, lịch sử điểm
 
 Không có trong repo: `data/` (dữ liệu BTC), `models/` (trọng số gốc), `runs/` (kết quả chạy, log, checkpoint).
 
-## Kết quả public
-
-| Bản       | Thay đổi chính                                                                                   | Public    |
-| --------- | ------------------------------------------------------------------------------------------------ | --------- |
-| v2        | LoRA v2, few-shot, macro công nợ                                                                 | 0.491     |
-|           | `qty` theo đơn vị cơ bản, trả lời `unanswerable` theo đa số                                      | 0.516     |
-|           | sinh mẫu mới, chuẩn hóa tên, hệ số đơn vị suy từ giá                                             | 0.60      |
-| v6        | ghi chú trước SQL, ví dụ macro công nợ                                                           | 0.63      |
-| sql-hints | v6 + gợi ý theo dạng câu hỏi, có danh sách đồng nghĩa lấy từ tên món public (đã bỏ ở v9)         | 0.696     |
-| v8        | LoRA v3 (thêm dữ liệu do model 27B giải làm teacher, chỉ trên train), kiểm tra view theo dữ liệu | 0.639     |
-| **v9**    | v8 + `sql-hints`, khóa bỏ phiếu theo cách chấm, sửa lớp công nợ                                  | **0.683** |
-
 ## Tuân thủ luật thi
 
 - Inference offline, không có người can thiệp, tổng tham số ≤ 15B (Qwen3.5-9B Apache-2.0 + LoRA 43M).
@@ -326,13 +372,28 @@ Không có trong repo: `data/` (dữ liệu BTC), `models/` (trọng số gốc)
   dòng sản phẩm) đã bị loại.
 - Toàn bộ private test chạy ≤ 6 giờ trên 2 × RTX 5090, log từng câu được giữ để chạy lại (Rule 8, lệch ≤ 0.03).
 
-## License
-
-Code, LoRA adapter và ngân hàng ví dụ trong repo theo [MIT License](LICENSE). Model Qwen3.5-9B tải riêng và
-theo license Apache-2.0 của Qwen. Dữ liệu của BTC không nằm trong repo và không thuộc license này.
-
-## Docs
+## Tài liệu
 
 - [Đề bài](docs/challenge.md)
 - [Ghi chú dữ liệu](docs/data-notes.md)
 - [Lịch sử điểm](docs/leaderboard.md)
+## Ghi nhận
+
+<p>
+  <img src="docs/figures/logos/qwen_gh.png" alt="Qwen" height="36">&nbsp;&nbsp;
+  <img src="docs/figures/logos/vllm.png" alt="vLLM" height="36">&nbsp;&nbsp;
+  <img src="docs/figures/logos/duckdb.png" alt="DuckDB" height="36">&nbsp;&nbsp;
+  <img src="docs/figures/logos/unsloth.png" alt="Unsloth" height="36">&nbsp;&nbsp;
+  <img src="docs/figures/logos/sqlite.png" alt="SQLite" height="36">
+</p>
+
+Xây dựng trên [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-9B), [vLLM](https://github.com/vllm-project/vllm),
+[DuckDB](https://duckdb.org), [Unsloth](https://github.com/unslothai/unsloth) và [flash-linear-attention](https://github.com/fla-org/flash-linear-attention).
+Cảm ơn BTC Zalo AI Challenge 2026 đã cung cấp dữ liệu và rulebook.
+
+Nhóm: Dương Trường Bình, Tô Phát Đạt, Trần Đại Nhân.
+
+## License
+
+Code, LoRA adapter và ngân hàng ví dụ trong repo theo [MIT License](LICENSE). Model Qwen3.5-9B tải riêng và
+theo license Apache-2.0 của Qwen. Dữ liệu của BTC không nằm trong repo và không thuộc license này.
