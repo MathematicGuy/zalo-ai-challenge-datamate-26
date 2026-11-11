@@ -9,7 +9,6 @@ import json
 import time
 from pathlib import Path
 
-from .llm import Engine
 from .pipeline import Pipeline, load_questions, run_in_background
 from .submission import merge_shards, write_submission
 
@@ -53,7 +52,25 @@ def parse_args(argv=None):
     p.add_argument("--log-dir", type=Path, help="one log record per question goes here (Docker: /result/logs); default OUTPUT/logs")
     p.add_argument("--merge-into", type=Path, help="after every shop, merge the sibling shard dirs of --output into DIR/submission.jsonl (Docker: /result)")
     p.add_argument("--engine", type=json.loads, default={}, help='extra vLLM engine kwargs as JSON, e.g. {"kv_cache_dtype": "fp8"}')
+    p.add_argument("--backend", choices=["vllm", "openai", "claude", "gemini"], default="vllm",
+                   help="vllm: in-process engine (the submission). openai: an OpenAI-compatible server (inference/qwen35-9b, --model = served name). "
+                        "claude / gemini: hosted APIs for model comparisons (--model = API model id)")
+    p.add_argument("--base-url", default="http://localhost:8000/v1", help="--backend openai: the server")
+    p.add_argument("--workers", type=int, help="remote backends: parallel requests (default: 16 openai, 10 claude, 2 x keys gemini)")
     return p.parse_args(argv)
+
+
+def make_engine(a):
+    """The model behind the pipeline: in-process vLLM, or a remote engine with the same interface (llm_remote.py, llm_api.py)."""
+    if a.backend == "vllm":
+        from .llm import Engine
+        return Engine(a.model, tp=a.tp, gpu_mem=a.gpu_mem, context=a.context, seed=a.seed, quant=a.quant, lora=a.lora, engine_kwargs=a.engine)
+    kw = {"log_path": a.output / "llm_calls.jsonl", "seed": a.seed, **({"workers": a.workers} if a.workers else {})}
+    if a.backend == "openai":
+        from .llm_remote import OpenAIEngine
+        return OpenAIEngine(a.model, base_url=a.base_url, **kw)
+    from .llm_api import ClaudeEngine, GeminiEngine
+    return (ClaudeEngine if a.backend == "claude" else GeminiEngine)(a.model, **kw)
 
 
 def main(argv=None):
@@ -69,7 +86,7 @@ def main(argv=None):
         merge_shards(a.merge_into, a.data / "questions.jsonl", shards=a.output.parent, copy_logs=False, quiet=True)
     pipe = Pipeline(a)
     loading = run_in_background(pipe.load_shops, shops)  # DuckDB loading overlaps the model start (the engine is a separate process)
-    pipe.engine = Engine(a.model, tp=a.tp, gpu_mem=a.gpu_mem, context=a.context, seed=a.seed, quant=a.quant, lora=a.lora, engine_kwargs=a.engine)
+    pipe.engine = make_engine(a)
     print(f"model ready in {time.time() - t0:.0f}s; shard {a.shard}: {len(shops)} shops, {len(qs)} questions", flush=True)
     loaded = loading.result()
     print(f"loaded {len(loaded)} shops in {time.time() - t0:.0f}s", flush=True)

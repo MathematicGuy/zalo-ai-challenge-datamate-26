@@ -25,3 +25,7 @@ build/
 zac2026_*.pdf
 result_docker/
 zaic2026_datamate_*.tar.gz*
+
+# Local secrets (API keys)
+env
+.env

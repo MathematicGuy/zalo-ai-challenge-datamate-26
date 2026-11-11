@@ -29,7 +29,7 @@ def load_questions(a):
     """The questions of this run: --ids / --limit filters, then this process's share of the shops (--shard i/n)."""
     qs = [json.loads(l) for l in (a.data / "questions.jsonl").read_text(encoding="utf-8-sig").splitlines() if l.strip()]
     if a.ids:
-        keep = set(re.findall(r"q_[0-9a-f]+", a.ids.read_text()))
+        keep = set(re.findall(r"\b[a-z]_[0-9a-f]+", a.ids.read_text()))  # q_ (public, train), p_ (synth private)
         qs = [q for q in qs if q["id"] in keep]
     qs = qs[:a.limit] if a.limit else qs
     i, n = map(int, a.shard.split("/"))

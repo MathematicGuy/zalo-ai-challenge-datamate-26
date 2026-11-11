@@ -333,11 +333,11 @@ def load_business(root, business, canon=False):
     groups = defaultdict(list)
     for n in tables:
         groups[tuple(c for c, _ in cols(n) if c != "_sheet")].append(n)
-    hidden = set()
+    hidden, unions = set(), defaultdict(list)
     for names in groups.values():
-        if len(names) < 2:
-            continue
-        view = union_key(names[0]) + "_all"
+        if len(names) >= 2:  # groups whose columns drift between months share one view (BY NAME fills the gaps with NULL)
+            unions[union_key(names[0]) + "_all"] += names
+    for view, names in unions.items():
         parts = [f"SELECT *, '{tables[n]}' AS _source FROM {quote(n)}" for n in names]
         db.execute(f"CREATE VIEW {quote(view)} AS " + " UNION ALL BY NAME ".join(parts))
         tables[view] = f"UNION of {len(names)} tables: " + ", ".join(tables[n] for n in names)

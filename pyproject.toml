@@ -14,6 +14,7 @@ dependencies = [
 
 [project.optional-dependencies]
 llm = ["vllm==0.32.0"]                       # inference (the training stack lives in training/requirements.txt, its own venv)
+api = ["openai==3.42.1", "anthropic==2.6.0", "google-genai==2.34.0", "requests"]  # remote engines (llm_remote.py, llm_api.py): the vLLM server, Claude, Gemini
 dev = ["pytest", "ruff", "matplotlib", "nbformat", "nbconvert", "ipykernel"]
 
 [build-system]

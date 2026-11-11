@@ -1,0 +1,46 @@
+diff --git a/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py b/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+index 28c0f0a..3f47711 100644
+--- a/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
++++ b/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py
+@@ -738,6 +738,18 @@ class QwenGatedDeltaNetAttention(GatedDeltaNetAttention):
+         # projection, removing the z reshape copy (see Qwen3_5DecoderLayer).
+         self._fused_gdn_gated_rms_norm: Callable[..., None] | None = None
+         self.gdn_decode_kernel = envs.VLLM_GDN_DECODE_KERNEL.strip().lower()
++        if (
++            envs.VLLM_BATCH_INVARIANT
++            and self.gdn_decode_kernel == "cuda"
++            and "VLLM_GDN_DECODE_KERNEL" not in os.environ
++        ):
++            # LOCAL PATCH (ZALO_AI llm-inference-optimizer, 2026-11-03): the fused CUDA MTP decode
++            # kernel only runs when the step has no prefill (_can_use_fused_gdn_mtp_decode); in a
++            # step that also carries another request's prefill chunk the same spec tokens go through
++            # causal_conv1d_update + the Triton recurrent kernel + a separate gated norm. Two kernels,
++            # two roundings -> greedy output depends on batch composition. Batch-invariant mode keeps
++            # every spec-decode step on the Triton path. See Zalo-Track-2 inference/qwen35-9b/.
++            self.gdn_decode_kernel = "triton"
+         if self.gdn_decode_kernel == "cuda" and current_platform.is_cuda_alike():
+             reason = self._fused_gdn_decode_unsupported_reason(vllm_config)
+             if reason is not None:
+diff --git a/vllm/v1/attention/backends/gdn_attn.py b/vllm/v1/attention/backends/gdn_attn.py
+index effd2a3..4723338 100644
+--- a/vllm/v1/attention/backends/gdn_attn.py
++++ b/vllm/v1/attention/backends/gdn_attn.py
+@@ -89,6 +89,18 @@ class GDNAttentionBackend(AttentionBackend):
+     def supports_device_cpu_query_lens_mismatch(cls) -> bool:
+         return True
+ 
++    @classmethod
++    def supports_batch_invariance(cls) -> bool:
++        # LOCAL PATCH (ZALO_AI llm-inference-optimizer, 2026-11-03): the GDN kernels work per
++        # sequence (causal conv1d, FlashInfer/FLA chunked prefill over cu_seqlens with fixed 64-token
++        # chunks and fp32 state, Triton recurrent update with a (K, V-block, seq*head) grid, row-wise
++        # gated RMSNorm); none reduces across sequences, and their Triton autotune keys hold no
++        # batch/token count. The one batch-dependent kernel choice (fused CUDA MTP decode only in
++        # prefill-free steps) is pinned to Triton in qwen_gdn_linear_attn.py under this mode.
++        # Projections are covered by VLLM_BATCH_INVARIANT's matmul overrides / per-token FP8.
++        # Verified by output agreement, see Zalo-Track-2 inference/qwen35-9b/README.md.
++        return True
++
+ 
+ @dataclass
+ class GDNAttentionMetadata:

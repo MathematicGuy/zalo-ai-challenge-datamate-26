@@ -1,0 +1,5 @@
+# created by setup.sh / server.sh: never commit
+.venv-vllm/
+vendor/
+logs/
+__pycache__/
